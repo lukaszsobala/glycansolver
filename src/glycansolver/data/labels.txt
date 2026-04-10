@@ -1,0 +1,5 @@
+# Derivatization labels for glycan mass spectrometry
+# name	mass	description
+2-AA	137.047679	2-Aminobenzoic acid (anthranilic acid)
+2-AB	136.063663	2-Aminobenzamide (anthranilamide)
+3-AQ	144.068748	3-Aminoquinoline

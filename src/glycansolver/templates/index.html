@@ -1,0 +1,2430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GlycanSolver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+<style>
+:root {
+  --bg: #f5f7fa; --card: #fff; --accent: #2563eb; --accent-hover: #1d4ed8;
+  --border: #d1d5db; --text: #1f2937; --muted: #6b7280; --danger: #dc2626;
+  --good: #16a34a; --bad: #dc2626; --warn: #d97706;
+  --grey-bg: #f3f4f6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+.container { width: 100%; min-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+h1 small { font-weight: 400; color: var(--muted); font-size: .85rem; }
+.title-row { display: flex; align-items: center; gap: .65rem; margin-bottom: .25rem; flex-wrap: wrap; }
+.title-logo { height: 36px; width: auto; display: block; }
+h2 { font-size: 1.1rem; margin: 1.25rem 0 .5rem; border-bottom: 2px solid var(--accent); padding-bottom: .25rem; }
+h3 { font-size: .95rem; margin: .75rem 0 .35rem; color: var(--muted); }
+
+/* Cards */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+
+/* Form grid */
+.form-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: .75rem; }
+.form-group { display: flex; flex-direction: column; min-width: 140px; }
+.form-group label { font-size: .8rem; font-weight: 600; color: var(--muted); margin-bottom: .2rem; }
+.form-group input, .form-group select, .form-group textarea {
+  padding: .4rem .55rem; border: 1px solid var(--border); border-radius: 5px;
+  font-size: .85rem; background: #fff;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37,99,235,.15);
+}
+textarea { resize: vertical; font-family: monospace; }
+
+/* Blocks table */
+.blocks-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.blocks-table th { text-align: left; padding: .35rem .5rem; border-bottom: 2px solid var(--border); color: var(--muted); font-size: .75rem; text-transform: uppercase; }
+.blocks-table td { padding: .3rem .5rem; border-bottom: 1px solid var(--grey-bg); }
+.blocks-table tr.excluded td { color: #9ca3af; }
+.blocks-table tr.candidate-only td { color: #6b7280; }
+.block-status { font-size: .72rem; font-weight: 600; white-space: nowrap; display: inline-block; width: 80px; }
+.block-status.st-known { color: var(--accent); }
+.block-status.st-candidate { color: var(--warn); }
+.block-status.st-excluded { color: var(--danger); }
+.blocks-table input[type=number] { width: 50px; padding: .2rem .35rem; border: 1px solid var(--border); border-radius: 4px; font-size: .82rem; text-align: center; }
+.blocks-table input[type=checkbox] { accent-color: var(--accent); }
+.blocks-table .btn-remove-custom { background:none; border:none; color:var(--danger); cursor:pointer; font-size:.9rem; padding:.1rem .3rem; border-radius:3px; }
+.blocks-table .btn-remove-custom:hover { background:#fee2e2; }
+/* Tri-state checkbox */
+.tri-cb { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; user-select: none;
+  padding: .2rem .45rem; border: 1px solid var(--border); border-radius: 5px; font-size: .78rem;
+  font-weight: 600; min-width: 90px; background: #fff; transition: border-color .15s, background .15s; }
+.tri-cb:hover { border-color: var(--accent); }
+.tri-cb .tri-icon { font-size: .9rem; line-height: 1; width: 1em; text-align: center; }
+.tri-cb[data-state="use"]      { color: var(--accent); border-color: #93c5fd; background: #eff6ff; }
+.tri-cb[data-state="discover"] { color: var(--warn);   border-color: #fcd34d; background: #fffbeb; }
+.tri-cb[data-state="exclude"]  { color: var(--danger); border-color: #fca5a5; background: #fef2f2; }
+.cat-badge { display: inline-block; font-size: .7rem; padding: .1rem .4rem; border-radius: 9px; font-weight: 600; }
+.cat-common { background: #dbeafe; color: #1e40af; }
+.cat-mod { background: #fef3c7; color: #92400e; }
+.cat-rare { background: #f3e8ff; color: #6b21a8; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: .4rem; padding: .55rem 1.1rem; border: none; border-radius: 6px;
+  font-size: .85rem; font-weight: 600; cursor: pointer; transition: background .15s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+.btn-secondary { background: var(--grey-bg); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: #e5e7eb; }
+.btn-danger { background: var(--danger); color: #fff; }
+
+/* Spinner */
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Candidates list */
+.cand-list { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 1rem; }
+.cand-list li { display: flex; align-items: center; gap: .6rem; padding: .35rem 0; border-bottom: 1px solid var(--grey-bg); font-size: .85rem; min-width: 0; }
+.cand-list .mass { font-family: monospace; min-width: 90px; }
+.cand-list .name { font-weight: 600; color: var(--accent); min-width: 60px; }
+.cand-list .score { color: var(--muted); font-size: .78rem; }
+
+/* Results table */
+.results-wrap { overflow-x: auto; margin-top: .5rem; }
+.results-table { width: 100%; border-collapse: collapse; font-size: .78rem; white-space: nowrap; }
+.results-table th { position: sticky; top: 0; background: var(--card); padding: .4rem .5rem; border-bottom: 2px solid var(--border); text-align: left; font-size: .72rem; text-transform: uppercase; color: var(--muted); }
+.results-table td { padding: .3rem .5rem; border-bottom: 1px solid var(--grey-bg); }
+.results-table tr:hover { background: #f0f4ff; }
+.results-table .good { color: var(--good); font-weight: 600; }
+.results-table .bad { color: var(--bad); font-weight: 600; }
+.sortable-header { cursor: pointer; user-select: none; }
+.sortable-header:hover { color: var(--text); background: #eef2ff; }
+.sortable-header .sort-indicator { margin-left: .35rem; font-size: .9em; color: var(--muted); }
+.sortable-header.sort-active { color: var(--text); }
+.model-filter { margin-bottom: .5rem; }
+.model-filter label { font-size: .82rem; margin-right: .75rem; }
+.model-filter select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 4px; font-size: .82rem; }
+
+/* Log area */
+/* ---- Biosynthetic panel ---- */
+.biosyn-table { width: 100%; border-collapse: collapse; font-size: .78rem; white-space: nowrap; cursor: pointer; }
+.biosyn-table th { position: sticky; top: 0; background: var(--card); padding: .4rem .5rem; border-bottom: 2px solid var(--border); text-align: left; font-size: .72rem; text-transform: uppercase; color: var(--muted); }
+.biosyn-table td { padding: .3rem .5rem; border-bottom: 1px solid var(--grey-bg); }
+.biosyn-table tr:hover > td { background: #f0f4ff; }
+.biosyn-table tr.selected-model > td { background: #e0e7ff; }
+.biosyn-score-best { color: var(--good); font-weight: 700; }
+.biosyn-score-ok { color: #d97706; }
+.biosyn-score-bad { color: var(--bad); }
+.biosyn-reach-good { color: var(--good); font-weight: 700; }
+.biosyn-reach-ok { color: #d97706; font-weight: 600; }
+.biosyn-reach-bad { color: var(--bad); font-weight: 600; }
+.biosyn-comps-good { color: var(--good); font-weight: 700; }
+.biosyn-comps-warn { color: #d97706; font-weight: 600; }
+.biosyn-comps-bad { color: var(--bad); font-weight: 600; }
+/* network stats bar */
+.biosyn-net-stats { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; font-size: .74rem; margin-bottom: .5rem; padding: .4rem .6rem; background: var(--grey-bg); border-radius: 6px; }
+.biosyn-net-stats .stat-label { color: var(--muted); margin-right: .2rem; }
+.biosyn-net-stats .stat-value { font-weight: 600; }
+/* tree display */
+.tree-container { overflow-x: auto; padding: .5rem 0 .5rem 2rem; font-size: .78rem; }
+.tree-row { display: flex; align-items: center; padding: .12rem 0; white-space: nowrap; }
+.tree-prefix { font-family: monospace; color: var(--muted); white-space: pre; user-select: none; }
+.tree-edge-label { font-weight: 600; font-size: .72rem; margin-right: .3rem; }
+.tree-node-box { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 4px; padding: .15rem .45rem; font-size: .72rem; display: inline-block; }
+.tree-node-mass { font-family: monospace; font-size: .68rem; color: var(--muted); margin-left: .35rem; }
+.tree-kind { font-size: .64rem; margin-left: .3rem; }
+.tree-degree { font-size: .64rem; margin-left: .4rem; padding: .05rem .3rem; border-radius: 3px; background: #dcfce7; color: #15803d; font-weight: 600; }
+.tree-degree-zero { background: #fef9c3; color: #a16207; }
+.tree-extra-clean { font-size: .62rem; margin-left: .3rem; color: #6366f1; font-style: italic; }
+.trans-clean { color: #16a34a; }
+.trans-skip { color: #d97706; }
+.trans-multi { color: #ea580c; }
+.trans-mixed { color: var(--bad); }
+.chain-row { display: none; }
+.chain-row.active { display: table-row; }
+.chain-row td { padding: .5rem .75rem 1rem; }
+/* ---- end biosynthetic ---- */
+.log-area { max-height: 250px; overflow-y: auto; background: #111827; color: #d1d5db; font-family: monospace;
+  font-size: .75rem; padding: .75rem; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+
+/* Progress */
+.progress-bar { width: 100%; height: 6px; background: var(--grey-bg); border-radius: 3px; overflow: hidden; margin: .5rem 0; }
+.progress-bar .fill { height: 100%; background: var(--accent); transition: width .3s; }
+
+/* Blocks summary */
+.blocks-summary { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: .5rem; }
+.block-chip { display: inline-flex; align-items: center; gap: .3rem; background: #eef2ff; border: 1px solid #c7d2fe;
+  border-radius: 6px; padding: .25rem .6rem; font-size: .8rem; }
+.block-chip .val { font-family: monospace; color: var(--muted); }
+.block-chip.discovered { background: #fef3c7; border-color: #fcd34d; }
+
+/* Visibility toggles */
+.hidden { display: none !important; }
+
+/* ---- Diagnostics panels ---- */
+.diag-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: .75rem; }
+@media (max-width: 800px) { .diag-grid { grid-template-columns: 1fr; } }
+
+.diag-section { background: var(--grey-bg); border-radius: 8px; padding: .75rem 1rem; }
+.diag-section h4 { font-size: .82rem; margin-bottom: .4rem; color: var(--accent); }
+.diag-row { display: flex; justify-content: space-between; font-size: .78rem; padding: .15rem 0; border-bottom: 1px solid #e5e7eb; }
+.diag-row:last-child { border-bottom: none; }
+.diag-label { color: var(--muted); }
+.diag-value { font-weight: 600; font-family: monospace; }
+.diag-ok { color: var(--good); }
+.diag-warn { color: var(--warn); }
+.diag-bad { color: var(--bad); }
+.diag-flag { display: inline-block; font-size: .7rem; padding: .1rem .35rem; border-radius: 4px; font-weight: 600; }
+.diag-flag-ok { background: #dcfce7; color: #15803d; }
+.diag-flag-warn { background: #fef3c7; color: #92400e; }
+.diag-flag-bad { background: #fee2e2; color: #991b1b; }
+/* block usage table */
+.block-usage-table { width: 100%; border-collapse: collapse; font-size: .76rem; margin-top: .35rem; }
+.block-usage-table th { text-align: left; padding: .25rem .4rem; border-bottom: 2px solid var(--border); color: var(--muted); font-size: .7rem; text-transform: uppercase; }
+.block-usage-table td { padding: .2rem .4rem; border-bottom: 1px solid #e5e7eb; }
+.block-usage-table tr.flagged td { background: #fef3c7; }
+/* co-occurrence mini-table */
+.coocc-list { list-style: none; padding: 0; margin: .25rem 0 0; font-size: .76rem; }
+.coocc-list li { padding: .12rem 0; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; }
+.coocc-list li:last-child { border-bottom: none; }
+.diag-model-selector { margin-bottom: .5rem; }
+.diag-model-selector label { font-size: .82rem; margin-right: .5rem; }
+.diag-model-selector select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 4px; font-size: .82rem; }
+/* ---- end diagnostics ---- */
+
+/* ---- Residual charts ---- */
+.residual-charts-grid { display: flex; flex-direction: column; gap: 1.25rem; margin-top: .75rem; }
+.residual-chart-card { background: var(--grey-bg); border-radius: 8px; padding: .75rem 1rem; }
+.residual-chart-card h4 { font-size: .82rem; margin-bottom: .5rem; color: var(--accent); }
+.residual-chart-wrap { position: relative; width: 100%; height: 300px; }
+/* ---- end residual charts ---- */
+
+/* Responsive */
+@media (max-width: 700px) {
+  .form-row { flex-direction: column; }
+  .form-group { min-width: 100%; }
+  .cand-list { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="title-row">
+  <h1>GlycanSolver <small>v{{ app_version }} · Progressive MALDI peak decomposition. Powered by Gurobi. Only for non-commercial purposes.</small></h1>
+  <img class="title-logo" src="/gurobi_logo.svg" alt="Gurobi logo">
+</div>
+
+<form id="mainForm" enctype="multipart/form-data">
+
+<!-- ============================================================ -->
+<!-- EXPERIMENT SETUP -->
+<!-- ============================================================ -->
+<div class="card">
+<h2>Experiment <small>Common mass expected in all peaks</small></h2>
+<div class="form-row">
+  <div class="form-group" style="flex:1;max-width:260px;">
+    <label>Job name</label>
+    <input type="text" name="job_name" id="jobName" value="" placeholder="e.g. My_sample_01" style="width:100%;">
+  </div>
+  <div class="form-group">
+    <label>Glycan chemistry</label>
+    <select name="glycan_type" id="glycanType" onchange="onGlycanChemistryChange()">
+      {% for gt in glycan_types %}
+      <option value="{{ gt }}" {{ 'selected' if gt == 'native' else '' }}>{{ gt|capitalize }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-group">
+    <label>Common block</label>
+    <select id="commonMode" name="common_mode" onchange="toggleCommon()">
+      <option value="composition" selected>From composition</option>
+      <option value="manual">Manual value</option>
+    </select>
+  </div>
+</div>
+
+<!-- Composition builder -->
+<div id="compositionGroup">
+  <h3 style="margin-top:.5rem;">Sugar composition</h3>
+  <div class="form-row" id="compositionRow">
+    {% for b in blocks %}
+    <div class="form-group" style="min-width:90px;max-width:110px;">
+      <label title="{{ b.full_name }}">{{ b.name }}</label>
+      <input type="number" name="common_{{ b.name }}" id="comp_{{ b.name }}"
+             value="{{ default_composition.get(b.name, 0) }}" min="0" max="20"
+             style="width:52px;text-align:center;" onchange="updateCommonPreview()">
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="form-row" style="margin-top:.5rem;">
+    <div class="form-group">
+      <label>Label</label>
+      <select name="label" id="label" onchange="onLabelChange()">
+        {% for lbl in labels %}
+        <option value="{{ lbl.name }}" data-mass="{{ lbl.mass }}" {{ 'selected' if loop.first else '' }}>{{ lbl.name }} ({{ "%.4f"|format(lbl.mass) }})</option>
+        {% endfor %}
+        <option value="none" data-mass="0">None (unlabelled)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Instrument polarity</label>
+      <select name="mode" id="mode" onchange="updateCommonPreview()">
+        <option value="neg_h" selected>Negative [M−H]⁻</option>
+        <option value="pos_na">Positive [M+Na]⁺</option>
+        <option value="pos_h">Positive [M+H]⁺</option>
+        <option value="zeropol">None</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Labeling reaction type</label>
+      <select name="reduction" id="reduction" onchange="updateCommonPreview()">
+        <option value="nr" selected>Non-reductive</option>
+        <option value="r">Reductive</option>
+        <option value="red_end">Free reducing end</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Computed mass</label>
+      <input type="text" id="commonPreview" readonly style="width:150px; background:#f9fafb; color:var(--muted); font-weight:600;">
+    </div>
+  </div>
+</div>
+
+<!-- Manual override -->
+<div class="form-row hidden" id="manualGroup">
+  <div class="form-group">
+    <label>Common block mass</label>
+    <input type="number" name="common_manual" id="commonManual" value="1028.36" step="0.01" style="width:150px">
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- BUILDING BLOCKS -->
+<!-- ============================================================ -->
+<div class="card">
+<h2>Sugar Building Blocks</h2>
+<p style="font-size:.8rem; color:var(--muted); margin-bottom:.5rem;">
+  Click the state to cycle:
+  <strong style="color:var(--accent)">✓ Use</strong> = known block →
+  <strong style="color:var(--warn)">○ Discover</strong> = solver may discover it →
+  <strong style="color:var(--danger)">✗ Exclude</strong> = forbidden.
+</p>
+<table class="blocks-table">
+<thead>
+  <tr><th style="width:110px">State</th><th>Block</th><th>Mass</th><th>Category</th><th>Max copies</th></tr>
+</thead>
+<tbody>
+{% for b in blocks %}
+<tr id="blockRow_{{ b.name }}" class="">
+  <td>
+    <input type="hidden" name="block_{{ b.name }}_state" id="bsVal_{{ b.name }}"
+           value="{{ 'use' if b.category == 'common' else 'exclude' }}">
+    <span class="tri-cb" id="bs_{{ b.name }}"
+          data-state="{{ 'use' if b.category == 'common' else 'exclude' }}"
+          data-name="{{ b.name }}" onclick="cycleBlockState('{{ b.name }}')">
+      <span class="tri-icon"></span><span class="tri-label"></span>
+    </span>
+  </td>
+  <td><strong title="{{ b.full_name }}">{{ b.name }}</strong></td>
+  <td style="font-family:monospace;">{{ "%.6f"|format(b.mass) }}</td>
+  <td><span class="cat-badge cat-{{ b.category }}">{{ b.category }}</span></td>
+  <td><input type="number" name="block_{{ b.name }}_limit" id="lim_{{ b.name }}"
+       value="{{ b.max_limit }}" min="1" max="50" style="width:55px"
+       data-category="{{ b.category }}"></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+<!-- Add custom block -->
+<div style="margin-top:.5rem; display:flex; align-items:flex-end; gap:.5rem; flex-wrap:wrap;" id="addBlockRow">
+  <div class="form-group" style="min-width:100px;">
+    <label>Name</label>
+    <input type="text" id="customBlockName" placeholder="e.g. MySugar" style="width:110px;">
+  </div>
+  <div class="form-group" style="min-width:100px;">
+    <label>Mass</label>
+    <input type="number" id="customBlockMass" placeholder="162.053" step="0.01" min="0" style="width:120px;">
+  </div>
+  <div class="form-group" style="min-width:60px;">
+    <label>Max</label>
+    <input type="number" id="customBlockLimit" value="4" min="1" max="20" style="width:55px;text-align:center;">
+  </div>
+  <button type="button" class="btn btn-secondary" onclick="addCustomBlock()" style="padding:.4rem .7rem; font-size:.82rem;" title="Add custom block">
+    ＋ Add block
+  </button>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ALGORITHM PARAMETERS -->
+<!-- ============================================================ -->
+<div class="card">
+<h2>Algorithm Parameters</h2>
+<div class="form-row">
+  <div class="form-group">
+    <label>Max unknown blocks</label>
+    <input type="number" name="max_unknown_blocks" value="0" min="0" max="10">
+  </div>
+  <div class="form-group">
+    <label>Max unknown copies / peak</label>
+    <input type="number" name="max_unknown_copies" value="4" min="1" max="20">
+  </div>
+  <div class="form-group hidden">
+    <label>Allowed bad peaks</label>
+    <input type="number" name="bad" value="0" min="0" max="50">
+  </div>
+</div>
+<div class="form-row">
+  <div class="form-group">
+    <label>Tolerance (optimisation)</label>
+    <input type="number" name="tolerance" value="0.3" step="0.01" min="0.01" max="5" style="width:90px">
+  </div>
+  <div class="form-group">
+    <label>Final tolerance</label>
+    <input type="number" name="final_tolerance" value="0.5" step="0.01" min="0.01" max="5" style="width:90px">
+  </div>
+  <div class="form-group">
+    <label>Lower bound (unknown mass)</label>
+    <input type="number" name="lower_bound" value="35" step="1" min="1" max="500" style="width:90px">
+  </div>
+  <div class="form-group">
+    <label>Upper bound (unknown mass)</label>
+    <input type="number" name="upper_bound" value="370" step="1" min="1" max="1000" style="width:90px">
+  </div>
+</div>
+<div class="form-row">
+  <div class="form-group">
+    <label>Model comparison</label>
+    <select name="exhaustive" style="width:220px">
+      <option value="1" selected>Exhaustive (Hex subsets)</option>
+      <option value="2">Exhaustive (all subsets)</option>
+      <option value="0">Nested (progressive only)</option>
+    </select>
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PEAK INPUT -->
+<!-- ============================================================ -->
+<div class="card">
+<h2>Peak Data</h2>
+<div class="form-row" style="align-items:flex-start;">
+  <div class="form-group" style="flex:1;">
+    <label>Paste peaks (one per line)</label>
+    <textarea name="peaks_text" id="peaksText" rows="8" placeholder="1352.555
+1377.587
+1393.582
+..."></textarea>
+    <button type="button" class="btn btn-secondary hidden" id="btnUseBadPeaks"
+            onclick="useBadPeaks()" style="margin-top:.4rem; font-size:.78rem; padding:.3rem .7rem;">
+      &#x21b5; Use BAD peaks from results
+    </button>
+  </div>
+  <div style="display:flex; align-items:center; padding-top:1rem; color:var(--muted); font-weight:600;">or</div>
+  <div class="form-group">
+    <label>Upload file (.txt or .msd)</label>
+    <input type="file" name="peaks_file" id="peaksFile" accept=".txt,.msd,.csv,.tsv">
+    <span id="fileName" style="font-size:.78rem; color:var(--muted); margin-top:.2rem;"></span>
+    <button type="button" class="btn btn-secondary" id="btnLoadExample"
+            onclick="loadExamplePeaks()" style="font-size:.78rem; padding:.3rem .7rem; margin-top:.4rem;">
+      &#x1F4C4; Load example peaks
+    </button>
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ACTION BUTTONS -->
+<!-- ============================================================ -->
+<div style="display:flex; gap:.75rem; flex-wrap: wrap; margin-bottom:1rem;">
+  <button type="button" class="btn btn-secondary" onclick="findCandidates()" id="btnCandidates">
+    1. Find Candidates
+  </button>
+  <button type="button" class="btn btn-primary" onclick="runSolve()" id="btnSolve" disabled>
+    2. Solve
+  </button>
+  <button type="button" class="btn btn-danger hidden" onclick="stopSolve()" id="btnStopSolve">
+    Stop
+  </button>
+</div>
+
+</form>
+
+<!-- ============================================================ -->
+<!-- CANDIDATES PANEL -->
+<!-- ============================================================ -->
+<div class="card hidden" id="candidatesPanel">
+<h2>Candidate Unknown Blocks</h2>
+<p style="font-size:.8rem; color:var(--muted); margin-bottom:.5rem;">
+  Top candidates discovered from pairwise peak differences.
+  All candidates are pre-selected; uncheck any you want to exclude.
+  At most <strong>Max unknown blocks</strong> will be used.
+  <span id="candLimitHint" style="font-weight:600; color:var(--accent); margin-left:.5rem;"></span>
+</p>
+<ul class="cand-list" id="candList"></ul>
+<input type="hidden" id="deselectedCandidates" value="">
+</div>
+
+<!-- ============================================================ -->
+<!-- SOLVE PROGRESS -->
+<!-- ============================================================ -->
+<div class="card hidden" id="progressPanel">
+<h2>Solving…</h2>
+<div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+<div id="progressText" style="font-size:.8rem; color:var(--muted);">Starting solver…</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESULTS -->
+<!-- ============================================================ -->
+<div class="card hidden" id="resultsPanel">
+<h2>Results</h2>
+<div style="margin-bottom:.5rem;">
+  <a id="downloadZipBtn" class="btn btn-secondary hidden" href="#" download>
+    Download all results (.zip)
+  </a>
+</div>
+
+<h3>Blocks</h3>
+<div class="blocks-summary" id="blocksSummary"></div>
+
+<h3>Decompositions</h3>
+<div class="model-filter" id="modelFilterArea">
+  <label for="modelSelect">Filter by model:</label>
+  <select id="modelSelect" onchange="filterResults()">
+    <option value="__all__">All models</option>
+  </select>
+  <span id="modelBIC" style="margin-left:.75rem; font-size:.82rem; color:var(--muted);"></span>
+</div>
+<div class="results-wrap">
+  <table class="results-table" id="resultsTable">
+    <thead id="resultsHead"></thead>
+    <tbody id="resultsBody"></tbody>
+  </table>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- BIOSYNTHETIC PLAUSIBILITY -->
+<!-- ============================================================ -->
+<div class="card hidden" id="biosynPanel">
+<h2>Biosynthetic Plausibility</h2>
+<p style="font-size:.82rem;color:var(--muted);margin-top:-.25rem;">
+  Full pairwise biosynthetic network analysis. Lower score = simpler, more plausible network.
+  Click a row to expand. Each node shows its <strong>direct-link neighbors</strong> (single-step matches)
+  and extra direct links beyond the backbone tree.
+</p>
+<div class="results-wrap">
+  <table class="biosyn-table" id="biosynTable">
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Model</th>
+        <th>BIC</th>
+        <th>Score ↑</th>
+        <th>N&nbsp;Good</th>
+        <th title="Total single-step links in the full network">Direct&nbsp;links</th>
+        <th title="Average single-step links per peak">Avg&nbsp;direct&nbsp;links</th>
+        <th title="Fraction of peaks in the largest single-step connected group">Main-group&nbsp;coverage</th>
+        <th title="Number of connected groups when using only single-step links">Link&nbsp;groups</th>
+        <th title="Backbone links in the minimum-spanning tree">Backbone</th>
+        <th title="Direct/Skip/Multi/Mixed">D/S/M/X</th>
+        <th title="Average backbone penalty (lower is better)">Backbone&nbsp;pen.</th>
+      </tr>
+    </thead>
+    <tbody id="biosynBody"></tbody>
+  </table>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- BLOCK DEPENDENCY -->
+<!-- ============================================================ -->
+<div class="card hidden" id="blockDepPanel">
+<h2 style="cursor:pointer;" onclick="toggleBlockDepPanel()">
+  Block Dependency <span id="blockDepChevron">▸</span>
+</h2>
+<p style="font-size:.82rem;color:var(--muted);margin-top:-.25rem;">
+  Inferred biosynthetic dependency tree between blocks based on exhaustive model comparison.
+</p>
+<div id="blockDepBody" class="hidden">
+  <pre id="blockDepTree" style="font-size:.82rem; line-height:1.6; margin:0;"></pre>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESIDUAL CHARTS -->
+<!-- ============================================================ -->
+<div class="card hidden" id="residualChartsPanel">
+<h2>Residual Charts</h2>
+<p style="font-size:.82rem;color:var(--muted);margin-top:-.25rem;">
+  Mass error (observed &minus; reconstructed) vs m/z for each model.
+  <span style="color:var(--good);font-weight:600;">Green</span> = GOOD,
+  <span style="color:var(--bad);font-weight:600;">Red</span> = BAD.
+</p>
+<div class="diag-model-selector" id="residChartModelSelector">
+  <label for="residChartModelSelect">Model:</label>
+  <select id="residChartModelSelect" onchange="filterResidualCharts()"></select>
+  <label for="residChartYScale" style="margin-left:.75rem;">Y axis:</label>
+  <select id="residChartYScale" onchange="filterResidualCharts()">
+    <option value="auto">Autoscale (all peaks)</option>
+    <option value="good" selected>Scale to GOOD peaks</option>
+  </select>
+</div>
+<div id="residualChartsContainer" class="residual-charts-grid"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- MODEL DIAGNOSTICS -->
+<!-- ============================================================ -->
+<div class="card hidden" id="diagPanel">
+<h2 style="cursor:pointer;" onclick="toggleDiagnosticsPanel()">
+  Model Diagnostics <span id="diagPanelChevron">▸</span>
+</h2>
+<p style="font-size:.82rem;color:var(--muted);margin-top:-.25rem;">
+  Residual analysis and block usage statistics for each model.
+</p>
+<div id="diagPanelBody" class="hidden">
+  <div class="diag-model-selector" id="diagModelSelector">
+    <label for="diagModelSelect">Model:</label>
+    <select id="diagModelSelect" onchange="renderDiagnostics()"></select>
+  </div>
+  <div id="diagContent"></div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- LOG -->
+<!-- ============================================================ -->
+<div class="card hidden" id="logPanel">
+<h2 style="cursor:pointer;" onclick="document.getElementById('logArea').classList.toggle('hidden')">
+  Solver Log ▾
+</h2>
+<div style="margin:.25rem 0 .5rem;">
+  <a id="downloadZipBtnLog" class="btn btn-secondary hidden" href="#" download>
+    Download all results (.zip)
+  </a>
+</div>
+<div class="log-area hidden" id="logArea"></div>
+</div>
+
+</div><!-- /container -->
+
+<script>
+// ============================================================
+// Common block helpers — composition-based mass computation
+// ============================================================
+let blockMasses = {
+  {% for name, mass in block_masses.items() %}
+  "{{ name }}": {{ mass }},
+  {% endfor %}
+};
+
+// Per-glycan-type data passed from the server
+const _blocksData = {
+  {% for gt in glycan_types %}
+  "{{ gt }}": [
+    {% for b in blocks_by_type[gt] %}
+    { name: "{{ b.name }}", mass: {{ b.mass }}, category: "{{ b.category }}", max_limit: {{ b.max_limit }}, full_name: "{{ b.full_name }}" },
+    {% endfor %}
+  ],
+  {% endfor %}
+};
+
+const _blockMassesData = {
+  {% for gt in glycan_types %}
+  "{{ gt }}": {
+    {% for name, mass in block_masses_by_type[gt].items() %}
+    "{{ name }}": {{ mass }},
+    {% endfor %}
+  },
+  {% endfor %}
+};
+
+// Free-reducing-end label mass per glycan type (from blocks.txt)
+const FREE_RED_END_MASS = {
+  {% for gt, mass in free_red_end_masses.items() %}
+  {{ gt }}: {{ mass }},
+  {% endfor %}
+};
+
+const H_MASS  = 1.00784;
+const NA_MASS = 22.989769;
+const O_MASS  = 15.994915;
+const ADDUCTS    = { "neg_h": -H_MASS, "pos_na": NA_MASS, "pos_h": H_MASS , "zeropol": 0 };
+const REDUCTION  = { "nr": 0.0, "r": -2 * H_MASS , "red_end": + 2 * H_MASS + O_MASS };
+
+let _activeJobId = null;
+let _pollTimer = null;
+
+function toggleCommon() {
+  const mode = document.getElementById('commonMode').value;
+  document.getElementById('compositionGroup').classList.toggle('hidden', mode === 'manual');
+  document.getElementById('manualGroup').classList.toggle('hidden', mode !== 'manual');
+  updateCommonPreview();
+}
+
+function onLabelChange() {
+  const label = document.getElementById('label').value;
+  if (label === 'none') {
+    // Unlabelled glycans default to free reducing end (+H2O).
+    document.getElementById('reduction').value = 'red_end';
+  }
+  updateCommonPreview();
+}
+
+function updateCommonPreview() {
+  const mode = document.getElementById('commonMode').value;
+  const glycanType = document.getElementById('glycanType').value;
+  let val;
+  if (mode === 'manual') {
+    val = parseFloat(document.getElementById('commonManual').value);
+  } else {
+    // Sum sugars
+    let base = 0;
+    for (const [name, mass] of Object.entries(blockMasses)) {
+      const inp = document.getElementById('comp_' + name);
+      if (inp) base += (parseInt(inp.value) || 0) * mass;
+    }
+    // Label
+    const labelSel = document.getElementById('label');
+    const labelVal = labelSel.value;
+    if (labelVal === 'free_red_end') {
+      const gt = document.getElementById('glycanType').value;
+      base += FREE_RED_END_MASS[gt] || 0;
+    } else {
+      const labelOpt = labelSel.options[labelSel.selectedIndex];
+      base += parseFloat(labelOpt.dataset.mass) || 0;
+    }
+    // Polarity adduct
+    const pol = document.getElementById('mode').value;
+    base += ADDUCTS[pol] || 0;
+    // Reduction correction
+    const red = document.getElementById('reduction').value;
+    base += REDUCTION[red] || 0;
+    val = base;
+  }
+  document.getElementById('commonPreview').value = val ? val.toFixed(6) : '—';
+}
+
+// ============================================================
+// Glycan chemistry switching
+// ============================================================
+function onGlycanChemistryChange() {
+  const glycanType = document.getElementById('glycanType').value;
+  const blocks = _blocksData[glycanType] || _blocksData.native;
+  blockMasses = _blockMassesData[glycanType] || _blockMassesData.native;
+
+  // Rebuild blocks table
+  _rebuildBlocksTable(blocks);
+
+  // Rebuild composition row
+  _rebuildCompositionRow(blocks, glycanType);
+
+  // Update label, mode, reduction dropdowns
+  _updateDropdownsForGlycanType(glycanType);
+
+  updateCommonPreview();
+}
+
+function _rebuildBlocksTable(blocks) {
+  const tbody = document.querySelector('.blocks-table tbody');
+  tbody.innerHTML = '';
+  blocks.forEach(b => {
+    const defaultState = b.category === 'common' ? 'use' : 'exclude';
+    const tr = document.createElement('tr');
+    tr.id = 'blockRow_' + b.name;
+    tr.innerHTML =
+      '<td>' +
+        '<input type="hidden" name="block_' + b.name + '_state" id="bsVal_' + b.name + '" value="' + defaultState + '">' +
+        '<span class="tri-cb" id="bs_' + b.name + '" data-state="' + defaultState + '" data-name="' + b.name + '" onclick="cycleBlockState(\'' + b.name + '\')">' +
+          '<span class="tri-icon"></span><span class="tri-label"></span>' +
+        '</span>' +
+      '</td>' +
+      '<td><strong title="' + (b.full_name || b.name) + '">' + b.name + '</strong></td>' +
+      '<td style="font-family:monospace;">' + b.mass.toFixed(6) + '</td>' +
+      '<td><span class="cat-badge cat-' + b.category + '">' + b.category + '</span></td>' +
+      '<td><input type="number" name="block_' + b.name + '_limit" id="lim_' + b.name + '" value="' + b.max_limit + '" min="1" max="50" style="width:55px" data-category="' + b.category + '"></td>';
+    tbody.appendChild(tr);
+    setBlockState(b.name, defaultState);
+  });
+}
+
+function _rebuildCompositionRow(blocks, glycanType) {
+  const compRow = document.getElementById('compositionRow');
+  compRow.innerHTML = '';
+  const defaultComp = {{ default_composition | tojson }};
+  blocks.forEach(b => {
+    const defaultCount = defaultComp[b.name] || 0;
+    const div = document.createElement('div');
+    div.className = 'form-group';
+    div.id = 'compGroup_' + b.name;
+    div.style.cssText = 'min-width:90px;max-width:110px;';
+    div.innerHTML = '<label title="' + (b.full_name || b.name) + '">' + b.name + '</label>' +
+      '<input type="number" name="common_' + b.name + '" id="comp_' + b.name + '" ' +
+      'value="' + defaultCount + '" min="0" max="20" style="width:52px;text-align:center;" ' +
+      'onchange="updateCommonPreview()">';
+    compRow.appendChild(div);
+  });
+}
+
+function _updateDropdownsForGlycanType(glycanType) {
+  const labelSel = document.getElementById('label');
+  const modeSel = document.getElementById('mode');
+  const reductionSel = document.getElementById('reduction');
+
+  if (glycanType !== 'native') {
+    // Non-native types (permethylated, peracetylated, …):
+    // Label: only "Free reducing end" with the correct mass for this type
+    const freMass = FREE_RED_END_MASS[glycanType] || 0;
+    labelSel.innerHTML = '<option value="free_red_end" data-mass="' + freMass + '" selected>Free reducing end (' + freMass.toFixed(4) + ')</option>';
+    // Default to positive mode [M+Na]+
+    modeSel.value = 'pos_na';
+    // Hide reduction (not applicable)
+    reductionSel.value = 'nr';
+    reductionSel.closest('.form-group').classList.add('hidden');
+    // Adjust unknown-block mass bounds for derivatized glycans
+    document.querySelector('[name="lower_bound"]').value = '50';
+    document.querySelector('[name="upper_bound"]').value = '500';
+  } else {
+    // Restore native labels
+    labelSel.innerHTML = '';
+    {% for lbl in labels %}
+    labelSel.innerHTML += '<option value="{{ lbl.name }}" data-mass="{{ lbl.mass }}" {{ "selected" if loop.first else "" }}>{{ lbl.name }} ({{ "%.4f"|format(lbl.mass) }})</option>';
+    {% endfor %}
+    labelSel.innerHTML += '<option value="none" data-mass="0">None (unlabelled)</option>';
+    // Restore default mode
+    modeSel.value = 'neg_h';
+    // Restore default unknown-block mass bounds
+    document.querySelector('[name="lower_bound"]').value = '35';
+    document.querySelector('[name="upper_bound"]').value = '370';
+    // Show reduction
+    reductionSel.value = 'nr';
+    reductionSel.closest('.form-group').classList.remove('hidden');
+  }
+}
+
+updateCommonPreview();
+
+// ============================================================
+// Block state (tri-state checkbox)
+// ============================================================
+const _triStates = ['use', 'discover', 'exclude'];
+const _triIcons  = { use: '\u2713', discover: '\u25cb', exclude: '\u2717' };
+const _triLabels = { use: 'Use', discover: 'Discover', exclude: 'Exclude' };
+
+function getBlockState(name) {
+  const el = document.getElementById('bs_' + name);
+  return el ? el.dataset.state : 'exclude';
+}
+function setBlockState(name, state) {
+  const el = document.getElementById('bs_' + name);
+  const hid = document.getElementById('bsVal_' + name);
+  if (!el) return;
+  el.dataset.state = state;
+  if (hid) hid.value = state;
+  el.querySelector('.tri-icon').textContent = _triIcons[state];
+  el.querySelector('.tri-label').textContent = _triLabels[state];
+  syncBlockRow(name);
+}
+function cycleBlockState(name) {
+  const cur = getBlockState(name);
+  const next = _triStates[(_triStates.indexOf(cur) + 1) % 3];
+  setBlockState(name, next);
+  syncCandidateFromBlock(name);
+  enforceCandidateLimit();
+}
+function syncBlockRow(name) {
+  const row = document.getElementById('blockRow_' + name);
+  const lim = document.getElementById('lim_' + name);
+  const state = getBlockState(name);
+  row.classList.remove('excluded', 'candidate-only');
+  if (state === 'exclude') {
+    row.classList.add('excluded');
+  } else if (state === 'discover') {
+    row.classList.add('candidate-only');
+  }
+  if (lim) lim.disabled = (state !== 'use');
+}
+
+// ---- Candidate helpers ----
+function getMaxCandidates() {
+  return parseInt(document.querySelector('[name="max_unknown_blocks"]').value) || 0;
+}
+function getCandidateCheckboxByName(name) {
+  for (const cb of document.querySelectorAll('.cand-check')) {
+    if ((cb.dataset.name || '') === name) return cb;
+  }
+  return null;
+}
+function syncCandidateFromBlock(name) {
+  const cb = getCandidateCheckboxByName(name);
+  if (!cb) return;
+  const el = document.getElementById('bs_' + name);
+  if (!el) return;  // unnamed candidate — no block to sync
+  const state = getBlockState(name);
+  if (state === 'use') { cb.checked = false; cb.disabled = true; return; }
+  cb.checked = (state === 'discover');
+  cb.disabled = false;
+}
+function applyCandidateSelectionToBlock(cb) {
+  const name = cb.dataset.name;
+  if (!name) return;  // unnamed candidate — no block to update
+  const state = getBlockState(name);
+  if (state === 'use') return;  // known blocks are not affected
+  setBlockState(name, cb.checked ? 'discover' : 'exclude');
+}
+function enforceCandidateLimit() {
+  const checks = [...document.querySelectorAll('.cand-check')];
+  const nChecked = checks.filter(cb => cb.checked).length;
+  // Only disable candidates whose block is set to "use" (already known)
+  checks.forEach(cb => {
+    const name = cb.dataset.name || '';
+    const isKnown = name && getBlockState(name) === 'use';
+    if (isKnown) { cb.checked = false; cb.disabled = true; }
+  });
+  const hint = document.getElementById('candLimitHint');
+  if (hint) hint.textContent = `${checks.filter(cb => cb.checked).length} selected`;
+}
+function onCandidateToggle(cb) {
+  applyCandidateSelectionToBlock(cb);
+}
+// Init block rows
+{% for b in blocks %}
+setBlockState('{{ b.name }}', '{{ 'use' if b.category == 'common' else 'exclude' }}');
+{% endfor %}
+
+// ---- Custom block management ----
+let _customBlockCounter = 0;
+
+function addCustomBlock() {
+  const nameInp = document.getElementById('customBlockName');
+  const massInp = document.getElementById('customBlockMass');
+  const limitInp = document.getElementById('customBlockLimit');
+  let name = nameInp.value.trim();
+  const mass = parseFloat(massInp.value);
+  const limit = parseInt(limitInp.value) || 4;
+
+  if (!mass || mass <= 0) { alert('Please enter a valid mass.'); return; }
+  // Auto-generate name if empty
+  if (!name) { _customBlockCounter++; name = 'Custom_' + _customBlockCounter; }
+
+  // Sanitise name: only alphanum, underscore, dash
+  name = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  // Check for duplicate names
+  if (document.getElementById('blockRow_' + name)) {
+    alert('A block named "' + name + '" already exists.'); return;
+  }
+
+  _customBlockCounter++;
+
+  // Add row to blocks table
+  const tbody = document.querySelector('.blocks-table tbody');
+  const tr = document.createElement('tr');
+  tr.id = 'blockRow_' + name;
+  tr.dataset.custom = 'true';
+  tr.innerHTML =
+    '<td>' +
+      '<input type="hidden" name="block_' + name + '_state" id="bsVal_' + name + '" value="use">' +
+      '<input type="hidden" name="block_' + name + '_mass" value="' + mass.toFixed(6) + '">' +
+      '<input type="hidden" name="block_' + name + '_custom" value="1">' +
+      '<span class="tri-cb" id="bs_' + name + '" data-state="use" data-name="' + name + '" onclick="cycleBlockState(\'' + name + '\')">' +
+        '<span class="tri-icon"></span><span class="tri-label"></span>' +
+      '</span>' +
+    '</td>' +
+    '<td><strong>' + name + '</strong></td>' +
+    '<td style="font-family:monospace;">' + mass.toFixed(6) + '</td>' +
+    '<td><span class="cat-badge" style="background:#d1fae5;color:#065f46;">custom</span></td>' +
+    '<td style="display:flex;align-items:center;gap:.3rem;">' +
+      '<input type="number" name="block_' + name + '_limit" id="lim_' + name + '" value="' + limit + '" min="1" max="20" style="width:55px">' +
+      '<button type="button" class="btn-remove-custom" onclick="removeCustomBlock(\'' + name + '\')" title="Remove">✕</button>' +
+    '</td>';
+  tbody.appendChild(tr);
+  setBlockState(name, 'use');
+
+  // Register in blockMasses for common-block computation
+  blockMasses[name] = mass;
+
+  // Also add a composition spinner to the composition row
+  const compRow = document.getElementById('compositionRow');
+  const div = document.createElement('div');
+  div.className = 'form-group';
+  div.id = 'compGroup_' + name;
+  div.style.cssText = 'min-width:90px;max-width:110px;';
+  div.innerHTML = '<label>' + name + '</label>' +
+    '<input type="number" name="common_' + name + '" id="comp_' + name + '" value="0" min="0" max="20" style="width:52px;text-align:center;" onchange="updateCommonPreview()">';
+  compRow.appendChild(div);
+
+  // Clear inputs
+  nameInp.value = '';
+  massInp.value = '';
+  limitInp.value = '4';
+}
+
+function removeCustomBlock(name) {
+  const row = document.getElementById('blockRow_' + name);
+  if (row) row.remove();
+  const compGroup = document.getElementById('compGroup_' + name);
+  if (compGroup) compGroup.remove();
+  delete blockMasses[name];
+  updateCommonPreview();
+}
+
+// File upload: show filename and immediately extract peaks into the textarea
+let _peaksExtractRequestId = 0;
+document.getElementById('peaksFile').addEventListener('change', async function() {
+  const fileNameEl = document.getElementById('fileName');
+  const peaksTextEl = document.getElementById('peaksText');
+  const file = this.files[0];
+  fileNameEl.textContent = file?.name || '';
+
+  if (!file) return;
+
+  const requestId = ++_peaksExtractRequestId;
+  fileNameEl.textContent = `${file.name} (extracting peaks...)`;
+
+  const fd = new FormData();
+  fd.append('peaks_file', file);
+
+  try {
+    const resp = await fetch('/extract_peaks', { method: 'POST', body: fd });
+    const data = await resp.json();
+
+    // Ignore stale responses if user selected a newer file while this was running.
+    if (requestId !== _peaksExtractRequestId) return;
+
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || 'Could not extract peaks from uploaded file.');
+    }
+
+    peaksTextEl.value = data.peaks_text || '';
+    fileNameEl.textContent = `${file.name} (${data.count || 0} peaks loaded)`;
+  } catch (err) {
+    // Keep previous textarea content if extraction fails.
+    fileNameEl.textContent = file.name;
+    alert('Failed to load peaks from file: ' + err.message);
+  }
+});
+
+document.querySelector('[name="max_unknown_blocks"]').addEventListener('input', function() {
+  enforceCandidateLimit();
+});
+
+// ============================================================
+// Step 1: Find Candidates
+// ============================================================
+async function findCandidates() {
+  const btn = document.getElementById('btnCandidates');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Finding…';
+
+  const form = document.getElementById('mainForm');
+  const fd = new FormData(form);
+
+  try {
+    const resp = await fetch('/find_candidates', { method: 'POST', body: fd });
+    const data = await resp.json();
+
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+
+    // Store for step 2
+    window._peaksPath = data.peaks_path;
+
+    // Show candidates
+    const panel = document.getElementById('candidatesPanel');
+    panel.classList.remove('hidden');
+    const list = document.getElementById('candList');
+    list.innerHTML = '';
+
+    if (data.candidates.length === 0) {
+      list.innerHTML = '<li style="color:var(--muted)">No candidates found. You can still run Solve with known blocks only.</li>';
+    }
+
+    data.candidates.forEach((c, i) => {
+      const li = document.createElement('li');
+      // Pre-check all found candidates so they are tested by the solver
+      li.innerHTML = `
+        <input type="checkbox" data-mass="${c.median.toFixed(4)}" data-name="${c.name}" class="cand-check"
+               checked onchange="onCandidateToggle(this)">
+        <span class="mass">${c.median.toFixed(5)}</span>
+        <span class="name">${c.name || '?'}</span>
+        <span class="score">score ${c.score.toFixed(2)}, size ${c.size}</span>
+      `;
+      list.appendChild(li);
+    });
+    // Sync block states with candidate selection:
+    // - Checked named candidates → move block to "discover" (unless already "use")
+    // - Named blocks set to "use" are left alone
+    document.querySelectorAll('.cand-check').forEach(cb => {
+      if (cb.dataset.name) {
+        const name = cb.dataset.name;
+        const state = getBlockState(name);
+        if (state !== 'use' && cb.checked) {
+          setBlockState(name, 'discover');
+        }
+        syncCandidateFromBlock(name);
+      }
+    });
+    enforceCandidateLimit();
+
+    // Show log
+    if (data.log) {
+      document.getElementById('logPanel').classList.remove('hidden');
+      document.getElementById('logArea').textContent = data.log;
+    }
+
+    document.getElementById('btnSolve').disabled = false;
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '1. Find Candidates';
+  }
+}
+
+// ============================================================
+// Step 2: Solve
+// ============================================================
+async function runSolve() {
+  const btn = document.getElementById('btnSolve');
+  const stopBtn = document.getElementById('btnStopSolve');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Submitting…';
+  stopBtn.classList.remove('hidden');
+  stopBtn.disabled = true;
+
+  // Gather selected and deselected candidates
+  const deselected = [];
+  const selectedCandNames = [];
+  document.querySelectorAll('.cand-check').forEach(cb => {
+    if (cb.checked) {
+      if (cb.dataset.name) selectedCandNames.push(cb.dataset.name);
+    } else {
+      if (!cb.dataset.name) deselected.push(cb.dataset.mass);
+    }
+  });
+
+  const form = document.getElementById('mainForm');
+  const fd = new FormData(form);
+  fd.set('deselected_candidates', deselected.join(','));
+  fd.set('selected_candidates', selectedCandNames.join(','));
+  if (window._peaksPath) fd.set('peaks_path', window._peaksPath);
+
+  try {
+    const resp = await fetch('/solve', { method: 'POST', body: fd });
+    const data = await resp.json();
+
+    if (data.error) { alert(data.error); return; }
+
+    // Show progress
+    document.getElementById('progressPanel').classList.remove('hidden');
+    btn.innerHTML = '<span class="spinner"></span> Solving…';
+    stopBtn.disabled = false;
+
+    _activeJobId = data.job_id;
+
+    pollJob(data.job_id);
+  } catch (err) {
+    alert('Error: ' + err.message);
+    btn.disabled = false;
+    btn.innerHTML = '2. Solve';
+    stopBtn.classList.add('hidden');
+    stopBtn.disabled = true;
+  }
+}
+
+async function stopSolve() {
+  if (!_activeJobId) return;
+  const stopBtn = document.getElementById('btnStopSolve');
+  stopBtn.disabled = true;
+  try {
+    await fetch('/stop_job/' + _activeJobId, { method: 'POST' });
+    document.getElementById('progressText').textContent = 'Stopping solver safely…';
+  } catch (err) {
+    alert('Failed to request stop: ' + err.message);
+    stopBtn.disabled = false;
+  }
+}
+
+function pollJob(jobId) {
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+  }
+  _pollTimer = setInterval(async () => {
+    try {
+      const resp = await fetch('/job_status/' + jobId);
+      const data = await resp.json();
+
+      // Animate progress bar
+      const fill = document.getElementById('progressFill');
+      const pctNow = parseInt(fill.style.width) || 0;
+      if (data.status === 'queued') {
+        const pos = data.queue_position || '?';
+        const len = data.queue_length || '?';
+        fill.style.width = '5%';
+        document.getElementById('progressText').textContent =
+          `Queued – position ${pos} of ${len}. Waiting for other jobs to finish…`;
+      } else if (data.status === 'running') {
+        fill.style.width = Math.min(pctNow + 2, 90) + '%';
+        document.getElementById('progressText').textContent = 'Solver is running…';
+        if (data.log) {
+          document.getElementById('logPanel').classList.remove('hidden');
+          document.getElementById('logArea').textContent = data.log;
+          document.getElementById('logArea').classList.remove('hidden');
+        }
+      }
+
+      if (data.status === 'stopping') {
+        fill.style.width = Math.min(pctNow + 1, 95) + '%';
+        document.getElementById('progressText').textContent = 'Stopping solver safely…';
+      }
+
+      if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+        clearInterval(_pollTimer);
+        _pollTimer = null;
+        _activeJobId = null;
+        fill.style.width = '100%';
+        document.getElementById('progressPanel').classList.add('hidden');
+        document.getElementById('btnSolve').disabled = false;
+        document.getElementById('btnSolve').innerHTML = '2. Solve';
+        document.getElementById('btnStopSolve').classList.add('hidden');
+        document.getElementById('btnStopSolve').disabled = true;
+
+        if (data.log) {
+          document.getElementById('logPanel').classList.remove('hidden');
+          document.getElementById('logArea').textContent = data.log;
+          document.getElementById('logArea').classList.remove('hidden');
+        }
+
+        if (data.status === 'error') {
+          alert('Solver encountered an error. See log for details.');
+          return;
+        }
+
+        if (data.status === 'cancelled') {
+          alert('Solver stopped safely by user request.');
+          return;
+        }
+
+        showResults(data);
+      }
+    } catch (e) {
+      console.error('Poll error', e);
+    }
+  }, 2000);
+}
+
+// ============================================================
+// Results display
+// ============================================================
+let _allRows = [];
+let _headers = [];
+
+/**
+ * Collect BAD-peak observed masses from the currently filtered results
+ * and paste them into the peaks textarea for a second round.
+ */
+async function loadExamplePeaks() {
+  try {
+    const res = await fetch('/example_peaks');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    document.getElementById('peaksText').value = (await res.text()).trim();
+  } catch (e) {
+    alert('Failed to load example peaks: ' + e.message);
+  }
+}
+
+function useBadPeaks() {
+  const statusIdx = _headers.indexOf('Status');
+  const obsIdx    = _headers.indexOf('Observed');
+  if (statusIdx < 0 || obsIdx < 0) return;
+
+  // Respect the current model filter
+  const modelIdx = _headers.indexOf('Model');
+  const sel      = document.getElementById('modelSelect');
+  const chosen   = sel ? sel.value : '__all__';
+
+  const seen = new Set();
+  const badMasses = [];
+  _allRows.forEach(r => {
+    if (modelIdx >= 0 && chosen !== '__all__' && r[modelIdx] !== chosen) return;
+    if (r[statusIdx] !== 'BAD') return;
+    const obs = r[obsIdx];
+    if (!seen.has(obs)) {
+      seen.add(obs);
+      badMasses.push(obs);
+    }
+  });
+
+  if (badMasses.length === 0) {
+    alert('No BAD peaks in the current results view.');
+    return;
+  }
+
+  document.getElementById('peaksText').value = badMasses.join('\n');
+  // Clear any uploaded file so the pasted text is used
+  document.getElementById('peaksFile').value = '';
+  document.getElementById('fileName').textContent = '';
+  // Scroll up to the peaks card
+  document.getElementById('peaksText').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function _updateBadPeaksButton() {
+  const btn = document.getElementById('btnUseBadPeaks');
+  if (!btn) return;
+  const statusIdx = _headers.indexOf('Status');
+  const hasBad = statusIdx >= 0 && _allRows.some(r => r[statusIdx] === 'BAD');
+  btn.classList.toggle('hidden', !hasBad);
+}
+
+function showResults(data) {
+  const panel = document.getElementById('resultsPanel');
+  panel.classList.remove('hidden');
+
+  const dl = document.getElementById('downloadZipBtn');
+  const dlLog = document.getElementById('downloadZipBtnLog');
+  if (data.download_url) {
+    dl.href = data.download_url;
+    dl.classList.remove('hidden');
+    dlLog.href = data.download_url;
+    dlLog.classList.remove('hidden');
+  } else {
+    dl.href = '#';
+    dl.classList.add('hidden');
+    dlLog.href = '#';
+    dlLog.classList.add('hidden');
+  }
+
+  // Blocks summary
+  const bs = document.getElementById('blocksSummary');
+  bs.innerHTML = '';
+  _commonBlockMass = null;
+  (data.blocks || []).forEach(b => {
+    if (b.type === 'fixed' && _commonBlockMass === null) {
+      _commonBlockMass = parseFloat(b.value) || null;
+    }
+    const chip = document.createElement('span');
+    chip.className = 'block-chip' + (b.type === 'discovered' ? ' discovered' : '');
+    chip.innerHTML = `<strong>${b.name}</strong> <span class="val">${parseFloat(b.value).toFixed(5)}</span>`;
+    bs.appendChild(chip);
+  });
+
+  _headers = data.results_headers || [];
+  _allRows = data.results_rows || [];
+  _resultsSort = { index: -1, direction: 'asc' };
+
+  // Build header
+  renderResultsHeader();
+
+  // Detect if multi-model (has "Model" column)
+  const modelIdx = _headers.indexOf('Model');
+  const filterArea = document.getElementById('modelFilterArea');
+  if (modelIdx >= 0) {
+    filterArea.classList.remove('hidden');
+    const models = [...new Set(_allRows.map(r => r[modelIdx]))];
+    const sel = document.getElementById('modelSelect');
+    sel.innerHTML = '<option value="__all__">All models</option>';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    });
+    // Default to BioConsensus2 if available, then BioConsensus, otherwise last model
+    if (models.includes('BioConsensus2')) {
+      sel.value = 'BioConsensus2';
+    } else if (models.includes('BioConsensus')) {
+      sel.value = 'BioConsensus';
+    } else if (models.length > 0) {
+      sel.value = models[models.length - 1];
+    }
+  } else {
+    filterArea.classList.add('hidden');
+  }
+
+  filterResults();
+
+  // Biosynthetic plausibility panel
+  _biosynData = data.biosynthetic || null;
+  renderBiosynthetic(data.biosynthetic);
+
+  // Block dependency tree
+  renderBlockDependency(data.block_dependencies || null);
+
+  // Model diagnostics panel
+  initDiagnostics(data.diagnostics);
+
+  // Residual scatter charts
+  renderResidualCharts(data.diagnostics);
+
+  // Show "Use BAD peaks" button if there are any BAD peaks
+  _updateBadPeaksButton();
+
+  // Scroll to results
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function filterResults() {
+  const modelIdx = _headers.indexOf('Model');
+  const sel = document.getElementById('modelSelect');
+  const chosen = sel.value;
+
+  const bicIdx = _headers.indexOf('Model_BIC');
+  const statusIdx = _headers.indexOf('Status');
+
+  let rows = _allRows;
+  if (modelIdx >= 0 && chosen !== '__all__') {
+    rows = rows.filter(r => r[modelIdx] === chosen);
+  }
+  rows = sortRows(rows, row => row[_resultsSort.index], _resultsSort);
+
+  // Show BIC
+  if (bicIdx >= 0 && rows.length > 0) {
+    document.getElementById('modelBIC').textContent = 'BIC = ' + rows[0][bicIdx];
+  } else {
+    document.getElementById('modelBIC').textContent = '';
+  }
+
+  const bestModelIdx = _headers.indexOf('Best_Model');
+  const bestFormulaIdx = _headers.indexOf('Best_Formula');
+
+  // Block column indices for composition tints
+  const _tintBlocks = ['Hex', 'dHex', 'HexNAc', 'NeuAc'];
+  const _tintBlockIndices = _tintBlocks.map(b => _headers.indexOf(b));
+
+  const tbody = document.getElementById('resultsBody');
+  tbody.innerHTML = '';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+
+    // Highlight row if it matches the peak's best model
+    const isBestRow = bestModelIdx >= 0
+      && modelIdx >= 0
+      && r[bestModelIdx]
+      && r[modelIdx] === r[bestModelIdx];
+
+    const status = statusIdx >= 0 ? r[statusIdx] : '';
+
+    r.forEach((cell, ci) => {
+      const td = document.createElement('td');
+      td.textContent = cell;
+      if (ci === statusIdx) {
+        td.className = cell === 'GOOD' ? 'good' : (cell === 'BAD' ? 'bad' : '');
+      }
+      if (isBestRow && (ci === bestModelIdx || ci === bestFormulaIdx)) {
+        td.style.fontWeight = '700';
+        td.style.color = 'var(--accent)';
+      }
+      tr.appendChild(td);
+    });
+
+    // Row background: BAD = grey, GOOD = composition tint
+    if (status === 'BAD') {
+      tr.style.background = '#f7f7f7';
+    } else if (status === 'GOOD') {
+      const comp = _tintBlockIndices.map(i => i >= 0 ? (parseInt(r[i]) || 0) : 0);
+      const tint = getCompositionTint(comp, _tintBlocks);
+      if (tint) {
+        tr.style.background = tint;
+      }
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+// ============================================================
+// Biosynthetic plausibility panel
+// ============================================================
+function renderBiosynthetic(biosyn) {
+  const panel = document.getElementById('biosynPanel');
+  const tbody = document.getElementById('biosynBody');
+  tbody.innerHTML = '';
+
+  if (!biosyn || !biosyn.models || biosyn.models.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  renderBiosynHeader();
+  const numCols = 12;
+  const sortedModels = sortObjects(biosyn.models, model => getBiosynSortValue(model, _biosynSort.key), _biosynSort);
+  const bestScore = biosyn.models.reduce((minScore, model) => Math.min(minScore, model.score), Number.POSITIVE_INFINITY);
+
+  // Default to BioConsensus2 if available, then BioConsensus, otherwise best score (idx 0)
+  let defaultIdx = 0;
+  const bc2i = sortedModels.findIndex(m => m.model === 'BioConsensus2');
+  const bci  = sortedModels.findIndex(m => m.model === 'BioConsensus');
+  if (bc2i >= 0) defaultIdx = bc2i;
+  else if (bci >= 0) defaultIdx = bci;
+
+  sortedModels.forEach((m, idx) => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.dataset.modelIdx = idx;
+    if (idx === defaultIdx) tr.classList.add('selected-model');
+
+    const scoreClass = m.score === bestScore ? 'biosyn-score-best'
+                     : m.score < 1.5 ? 'biosyn-score-ok'
+                     : 'biosyn-score-bad';
+
+    const net = m.network || {};
+    const reach = net.clean_reachability || 0;
+    const reachClass = reach >= 0.95 ? 'biosyn-reach-good'
+                     : reach >= 0.7  ? 'biosyn-reach-ok'
+                     : 'biosyn-reach-bad';
+    const comps = net.n_clean_components || 0;
+    const compsClass = comps === 1 ? 'biosyn-comps-good'
+                     : comps <= 3  ? 'biosyn-comps-warn'
+                     : 'biosyn-comps-bad';
+
+    tr.innerHTML = `
+      <td>${m.rank}</td>
+      <td>${m.model}${(m.model === 'Consensus' || m.model === 'BioConsensus' || m.model === 'BioConsensus2') ? ` <span class="cat-badge cat-common">${m.model === 'BioConsensus2' ? 'bio-consensus-2' : m.model === 'BioConsensus' ? 'bio-consensus' : 'consensus'}</span>` : ''}</td>
+      <td>${m.bic != null ? m.bic.toFixed(1) : '\u2014'}</td>
+      <td class="${scoreClass}">${m.score.toFixed(3)}</td>
+      <td>${m.n_good}</td>
+      <td>${net.n_clean || 0}</td>
+      <td>${(net.avg_clean_degree || 0).toFixed(1)}</td>
+      <td class="${reachClass}">${(reach * 100).toFixed(0)}%</td>
+      <td class="${compsClass}">${comps}</td>
+      <td>${m.n_mst_edges || 0}</td>
+      <td title="Direct/Skip/Multi/Mixed: ${m.mst_clean||0}/${m.mst_skip||0}/${m.mst_multi||0}/${m.mst_mixed||0}">${m.mst_clean||0}/${m.mst_skip||0}/${m.mst_multi||0}/${m.mst_mixed||0}</td>
+      <td>${(m.mst_mean_penalty || 0).toFixed(3)}</td>
+    `;
+
+    // Detail row
+    const chainRow = document.createElement('tr');
+    chainRow.className = 'chain-row' + (idx === defaultIdx ? ' active' : '');
+    chainRow.dataset.modelIdx = idx;
+
+    const chainTd = document.createElement('td');
+    chainTd.colSpan = numCols;
+
+    // Network stats bar
+    const statsBar = document.createElement('div');
+    statsBar.className = 'biosyn-net-stats';
+    statsBar.innerHTML = `
+      <span><span class="stat-label">Total pairs:</span><span class="stat-value">${net.total_pairs||0}</span></span>
+      <span><span class="stat-label">Direct links:</span><span class="stat-value">${net.n_clean||0}</span></span>
+      <span><span class="stat-label">Skip:</span><span class="stat-value">${net.n_skip||0}</span></span>
+      <span><span class="stat-label">Multi:</span><span class="stat-value">${net.n_multi||0}</span></span>
+      <span><span class="stat-label">Mixed:</span><span class="stat-value">${net.n_mixed||0}</span></span>
+      <span><span class="stat-label">Direct-link density:</span><span class="stat-value">${((net.clean_density||0)*100).toFixed(1)}%</span></span>
+      <span><span class="stat-label">Avg direct links:</span><span class="stat-value">${(net.avg_clean_degree||0).toFixed(2)}</span></span>
+      <span><span class="stat-label">Largest link group:</span><span class="stat-value">${net.largest_clean_component||0}/${m.n_good}</span></span>
+      <span><span class="stat-label">Reachability:</span><span class="stat-value ${reachClass}">${(reach*100).toFixed(1)}%</span></span>
+    `;
+    chainTd.appendChild(statsBar);
+    chainTd.appendChild(buildTree(m.chain, biosyn.block_names || [], _commonBlockMass));
+    chainRow.appendChild(chainTd);
+
+    tr.addEventListener('click', () => {
+      tbody.querySelectorAll('tr:not(.chain-row)').forEach(r => r.classList.remove('selected-model'));
+      tbody.querySelectorAll('.chain-row').forEach(r => r.classList.remove('active'));
+      tr.classList.add('selected-model');
+      chainRow.classList.add('active');
+    });
+
+    tbody.appendChild(tr);
+    tbody.appendChild(chainRow);
+  });
+}
+
+function getCompositionTint(composition, blockNames) {
+  if (!composition || !blockNames || blockNames.length === 0) return '';
+  const hexIdx = blockNames.indexOf('Hex');
+  const fucIdx = blockNames.indexOf('dHex');
+  const hexNAcIdx = blockNames.indexOf('HexNAc');
+  const neuAcIdx = blockNames.indexOf('NeuAc');
+  const hex = hexIdx >= 0 ? (composition[hexIdx] || 0) : 0;
+  const fuc = fucIdx >= 0 ? (composition[fucIdx] || 0) : 0;
+  const hexNAc = hexNAcIdx >= 0 ? (composition[hexNAcIdx] || 0) : 0;
+  const neuAc = neuAcIdx >= 0 ? (composition[neuAcIdx] || 0) : 0;
+
+  // Priority: NeuAc > HexNAc > Hex+Fuc > Hex only
+  // dHex (Fuc) always blends in some red, regardless of category
+  if (neuAc > 0) {
+    // Purple: #9a36a0 = rgb(154, 54, 160), Red: rgb(238, 38, 46)
+    const redMix = Math.min(fuc, 3) * 0.10;
+    const baseMix = 1 - redMix;
+    const r = Math.round(154 * baseMix + 238 * redMix);
+    const g = Math.round(54 * baseMix + 38 * redMix);
+    const b = Math.round(160 * baseMix + 46 * redMix);
+    const alpha = 0.07 + Math.min(neuAc, 4) * 0.05 + Math.min(fuc, 3) * 0.02;
+    return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+  }
+  if (hexNAc > 0) {
+    // Blue: #3970c0 = rgb(57, 112, 192), Red: rgb(238, 38, 46)
+    const redMix = Math.min(fuc, 3) * 0.10;
+    const baseMix = 1 - redMix;
+    const r = Math.round(57 * baseMix + 238 * redMix);
+    const g = Math.round(112 * baseMix + 38 * redMix);
+    const b = Math.round(192 * baseMix + 46 * redMix);
+    const alpha = 0.07 + Math.min(hexNAc, 4) * 0.05 + Math.min(fuc, 3) * 0.02;
+    return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+  }
+  if (hex > 0 && fuc > 0) {
+    // Green + subtle red shift per Fuc
+    // Green: rgb(52, 183, 93), Red: rgb(238, 38, 46)
+    const redMix = Math.min(fuc, 3) * 0.10;  // 10-30% red influence
+    const greenMix = 1 - redMix;
+    const r = Math.round(52 * greenMix + 238 * redMix);
+    const g = Math.round(183 * greenMix + 38 * redMix);
+    const b = Math.round(93 * greenMix + 46 * redMix);
+    const alpha = 0.07 + Math.min(hex, 9) * 0.025 + Math.min(fuc, 3) * 0.02;
+    return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+  }
+  if (hex > 0) {
+    // Green only: #34b75d = rgb(52, 183, 93)
+    const alpha = 0.07 + Math.min(hex, 9) * 0.025;
+    return `rgba(52, 183, 93, ${alpha.toFixed(3)})`;
+  }
+  return '';
+}
+
+function buildTree(chain, blockNames, commonBlockMass) {
+  const container = document.createElement('div');
+  container.className = 'tree-container';
+  if (!chain || chain.length === 0) return container;
+
+  // ---- Mass layout parameters ----
+  const realNodes = chain.filter(n => !n.is_virtual_root && n.mass > 0);
+  if (realNodes.length === 0) return container;
+
+  const minPeakMass = Math.min(...realNodes.map(n => n.mass));
+  const commonMass = (commonBlockMass && commonBlockMass < minPeakMass) ? commonBlockMass : minPeakMass;
+  const maxMass    = Math.max(...realNodes.map(n => n.mass));
+  const rulerEnd   = Math.ceil(maxMass / 1000) * 1000;
+  const massRange  = rulerEnd - commonMass || 1;
+
+  // Smart auto-scale: ~20px between median-spaced neighbours
+  const sortedMasses = realNodes.map(n => n.mass).sort((a, b) => a - b);
+  let pxPerDa = 0.3;
+  if (sortedMasses.length >= 2) {
+    const gaps = [];
+    for (let i = 1; i < sortedMasses.length; i++) {
+      const g = sortedMasses[i] - sortedMasses[i - 1];
+      if (g > 0.5) gaps.push(g);
+    }
+    if (gaps.length > 0) {
+      gaps.sort((a, b) => a - b);
+      const medianGap = gaps[Math.floor(gaps.length / 2)];
+      pxPerDa = 20 / medianGap;
+    }
+  }
+  const TRACK_PX = Math.max(120, Math.min(800, Math.round(massRange * pxPerDa)));
+  const massToX  = (mass) => {
+    if (!mass || mass <= 0) return 0;
+    return Math.max(0, ((mass - commonMass) / massRange) * TRACK_PX);
+  };
+
+  // ---- m/z ruler (no prefix offset — ruler starts at x=0) ----
+  const rulerRow = document.createElement('div');
+  rulerRow.style.cssText = 'position:relative; height:1.3rem; margin-bottom:.15rem;'
+    + 'width:' + (TRACK_PX + 2) + 'px; border-bottom:1px solid #d1d5db;';
+
+  const interval = _niceTickInterval(massRange, 6);
+  _addRulerTick(rulerRow, 0, commonMass.toFixed(0), true);
+  const firstTick = Math.ceil(commonMass / interval) * interval;
+  for (let mz = firstTick; mz <= rulerEnd + interval * 0.01; mz += interval) {
+    if (Math.abs(mz - commonMass) < interval * 0.05) continue;
+    _addRulerTick(rulerRow, massToX(mz), mz.toFixed(0), false);
+  }
+  _addRulerTick(rulerRow, TRACK_PX, rulerEnd.toFixed(0), false);
+  container.appendChild(rulerRow);
+
+  // ---- Tree rows ----
+  // Track the m/z-x of the most recent node at each depth, and which depths
+  // still have more children (active vertical lines).
+  const depthMzX = [];        // depthMzX[d] = px x of node at depth d
+  const activeLevels = new Set();  // depths whose nodes have more children
+  const LINE_COLOR = '#000';
+  const LINE_W = '1.5px';
+  const ROW_PAD = '.12rem';   // must match .tree-row vertical padding
+
+  chain.forEach((node, idx) => {
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+
+    const tint = getCompositionTint(node.composition, blockNames);
+    if (tint) {
+      row.style.background = tint;
+      row.style.borderRadius = '3px';
+    }
+
+    const mzX = node.is_virtual_root ? 0 : massToX(node.mass);
+
+    // Is this the last sibling at its depth?
+    let isLast = true;
+    for (let j = idx + 1; j < chain.length; j++) {
+      if (chain[j].depth < node.depth) break;
+      if (chain[j].depth === node.depth) { isLast = false; break; }
+    }
+
+    // ---- Spacer: width = mzX, contains tree lines via absolute positioning ----
+    const spacer = document.createElement('span');
+    spacer.style.cssText = 'display:inline-block; position:relative;'
+      + 'width:' + mzX + 'px; flex-shrink:0; align-self:stretch;';
+
+    if (node.depth > 0) {
+      const parentX = depthMzX[node.depth - 1] || 0;
+
+      // Vertical continuation bars for active ancestors (depths < current depth)
+      for (let d = 1; d < node.depth; d++) {
+        if (activeLevels.has(d)) {
+          const barX = depthMzX[d - 1] || 0;
+          const vbar = document.createElement('span');
+          vbar.style.cssText = 'position:absolute; left:' + barX + 'px;'
+            + 'top:-' + ROW_PAD + '; bottom:-' + ROW_PAD + ';'
+            + 'width:0; border-left:' + LINE_W + ' solid ' + LINE_COLOR + ';';
+          spacer.appendChild(vbar);
+        }
+      }
+
+      // Branch from parent — vertical part at parentX
+      const bv = document.createElement('span');
+      if (isLast) {
+        // └ shape: top → middle (half height)
+        bv.style.cssText = 'position:absolute; left:' + parentX + 'px;'
+          + 'top:-' + ROW_PAD + '; height:calc(50% + ' + ROW_PAD + ');'
+          + 'width:0; border-left:' + LINE_W + ' solid ' + LINE_COLOR + ';';
+      } else {
+        // ├ shape: full height (continues for next sibling)
+        bv.style.cssText = 'position:absolute; left:' + parentX + 'px;'
+          + 'top:-' + ROW_PAD + '; bottom:-' + ROW_PAD + ';'
+          + 'width:0; border-left:' + LINE_W + ' solid ' + LINE_COLOR + ';';
+      }
+      spacer.appendChild(bv);
+
+      // Branch — horizontal part from parentX → mzX at vertical centre
+      const hLeft = Math.min(parentX, mzX);
+      const hWidth = Math.abs(mzX - parentX);
+      if (hWidth > 0) {
+        const bh = document.createElement('span');
+        bh.style.cssText = 'position:absolute; left:' + hLeft + 'px; top:50%;'
+          + 'width:' + hWidth + 'px; height:0;'
+          + 'border-top:' + LINE_W + ' solid ' + LINE_COLOR + ';';
+        spacer.appendChild(bh);
+      }
+    }
+
+    row.appendChild(spacer);
+
+    // ---- Anchor stub + transition label → peak info (contiguous at mzX) ----
+    if (node.transition) {
+      // Short vertical stub (half-height upward) at the anchor point
+      const stub = document.createElement('span');
+      stub.style.cssText = 'display:inline-block; width:0; height:.45em;'
+        + 'border-left:' + LINE_W + ' solid ' + LINE_COLOR + ';'
+        + 'vertical-align:middle; margin-right:.3rem;';
+      row.appendChild(stub);
+
+      const t = node.transition;
+      const edgeLbl = document.createElement('span');
+      edgeLbl.className = 'tree-edge-label trans-' + t.kind;
+      edgeLbl.textContent = (t.addition_label || t.delta_label || '?') + ' ';
+      edgeLbl.title = 'Full transition: ' + (t.delta_label || '?');
+      row.appendChild(edgeLbl);
+      row.appendChild(document.createTextNode('\u2192 '));
+    }
+
+    if (node.is_virtual_root) {
+      const rootLine = document.createElement('span');
+      rootLine.style.cssText = 'display:inline-block;width:0;height:1em;'
+        + 'border-left:2px solid #6d28d9;vertical-align:middle;margin-right:.35rem;';
+      row.appendChild(rootLine);
+    } else {
+      const peakBadge = document.createElement('span');
+      peakBadge.style.cssText = 'font-size:.68rem;color:var(--muted);font-weight:600;margin-right:.25rem;';
+      peakBadge.textContent = '#' + node.peak_id;
+      row.appendChild(peakBadge);
+    }
+
+    const box = document.createElement('span');
+    box.className = 'tree-node-box';
+    if (node.is_virtual_root) {
+      box.style.cssText = 'background:#ede9fe;border-color:#a78bfa;font-weight:600;';
+      box.title = 'Common block (virtual root)';
+    } else {
+      box.title = 'Peak ' + node.peak_id;
+    }
+    box.textContent = node.formula || node.composition.join(',');
+    row.appendChild(box);
+
+    if (!node.is_virtual_root) {
+      const mass = document.createElement('span');
+      mass.className = 'tree-node-mass';
+      mass.textContent = ' ' + node.mass.toFixed(2);
+      row.appendChild(mass);
+    }
+
+    if (node.transition) {
+      const kind = document.createElement('span');
+      kind.className = 'tree-kind trans-' + node.transition.kind;
+      kind.textContent = ' [' + node.transition.kind + ', L1=' + node.transition.l1 + ']';
+      row.appendChild(kind);
+    }
+
+    if (!node.is_virtual_root) {
+      const deg = node.clean_degree || 0;
+      const degBadge = document.createElement('span');
+      degBadge.className = 'tree-degree' + (deg === 0 ? ' tree-degree-zero' : '');
+      degBadge.title = deg + ' single-step neighbors in full network';
+      degBadge.textContent = 'Neighbors: ' + deg;
+      row.appendChild(degBadge);
+    }
+
+    if (node.extra_clean && node.extra_clean.length > 0) {
+      const extra = document.createElement('span');
+      extra.className = 'tree-extra-clean';
+      extra.textContent = ' also: ' + node.extra_clean.map(e => e.also_label).join('; ');
+      extra.title = 'Additional single-step links not shown in the tree';
+      row.appendChild(extra);
+    }
+
+    // Update depth tracking
+    depthMzX[node.depth] = mzX;
+    if (node.depth > 0) {
+      if (isLast) activeLevels.delete(node.depth);
+      else        activeLevels.add(node.depth);
+    }
+
+    container.appendChild(row);
+  });
+
+  // ---- Bottom m/z ruler ----
+  const bottomRuler = document.createElement('div');
+  bottomRuler.style.cssText = 'position:relative; height:1.3rem; margin-top:.15rem;'
+    + 'width:' + (TRACK_PX + 2) + 'px; border-top:1px solid #d1d5db;';
+
+  _addRulerTickBottom(bottomRuler, 0, commonMass.toFixed(0), true);
+  for (let mz = firstTick; mz <= rulerEnd + interval * 0.01; mz += interval) {
+    if (Math.abs(mz - commonMass) < interval * 0.05) continue;
+    _addRulerTickBottom(bottomRuler, massToX(mz), mz.toFixed(0), false);
+  }
+  _addRulerTickBottom(bottomRuler, TRACK_PX, rulerEnd.toFixed(0), false);
+  container.appendChild(bottomRuler);
+
+  return container;
+}
+
+/* Ruler helpers */
+function _addRulerTick(track, x, label, isOrigin) {
+  const line = document.createElement('span');
+  line.style.cssText = 'position:absolute;left:' + x + 'px;bottom:0;width:1px;height:'
+    + (isOrigin ? '.55rem' : '.3rem') + ';background:' + (isOrigin ? '#6366f1' : '#c7d2fe') + ';';
+  track.appendChild(line);
+  const txt = document.createElement('span');
+  txt.style.cssText = 'position:absolute;left:' + x + 'px;top:0;transform:translateX(-50%);'
+    + 'font-size:.55rem;color:' + (isOrigin ? '#6366f1' : 'var(--muted)') + ';line-height:1;'
+    + (isOrigin ? 'font-weight:600;' : '');
+  txt.textContent = label;
+  track.appendChild(txt);
+}
+
+function _addRulerTickBottom(track, x, label, isOrigin) {
+  const line = document.createElement('span');
+  line.style.cssText = 'position:absolute;left:' + x + 'px;top:0;width:1px;height:'
+    + (isOrigin ? '.55rem' : '.3rem') + ';background:' + (isOrigin ? '#6366f1' : '#c7d2fe') + ';';
+  track.appendChild(line);
+  const txt = document.createElement('span');
+  txt.style.cssText = 'position:absolute;left:' + x + 'px;bottom:0;transform:translateX(-50%);'
+    + 'font-size:.55rem;color:' + (isOrigin ? '#6366f1' : 'var(--muted)') + ';line-height:1;'
+    + (isOrigin ? 'font-weight:600;' : '');
+  txt.textContent = label;
+  track.appendChild(txt);
+}
+
+function _niceTickInterval(range, targetTicks) {
+  if (range <= 0) return 1;
+  const rough = range / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  let nice;
+  if (norm < 2)        nice = 1;
+  else if (norm < 4)   nice = 2;
+  else if (norm < 8)   nice = 5;
+  else                  nice = 10;
+  return nice * mag;
+}
+
+// ============================================================
+// Diagnostics panel
+// ============================================================
+let _diagData = null;
+
+// ============================================================
+// Block Dependency panel
+// ============================================================
+
+function toggleBlockDepPanel() {
+  const body = document.getElementById('blockDepBody');
+  const chevron = document.getElementById('blockDepChevron');
+  if (!body || !chevron) return;
+  const show = body.classList.contains('hidden');
+  body.classList.toggle('hidden', !show);
+  chevron.textContent = show ? '▾' : '▸';
+}
+
+function renderBlockDependency(dep) {
+  const panel = document.getElementById('blockDepPanel');
+  const pre = document.getElementById('blockDepTree');
+  if (!panel || !pre) return;
+  if (!dep || !dep.blocks || dep.blocks.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+
+  // Build children map from edges
+  const children = {};
+  dep.edges.forEach(e => {
+    if (!children[e.parent]) children[e.parent] = [];
+    children[e.parent].push(e.child);
+  });
+  // Find roots (blocks that are never a child)
+  const childSet = new Set(dep.edges.map(e => e.child));
+  const roots = dep.blocks.filter(b => !childSet.has(b.name));
+
+  // Usage lookup
+  const usage = {};
+  dep.blocks.forEach(b => { usage[b.name] = b; });
+
+  // Build text tree
+  const lines = [];
+  function usageStr(name) {
+    const u = usage[name];
+    if (!u) return '';
+    return '  (used in ' + u.n_models_used + '/' + u.n_models_with + ' models)';
+  }
+  function subtree(name, prefix, isLast) {
+    const connector = isLast ? '\u2514\u2500\u2500 ' : '\u251C\u2500\u2500 ';
+    lines.push(prefix + connector + name + usageStr(name));
+    const kids = children[name] || [];
+    const childPrefix = prefix + (isLast ? '    ' : '\u2502   ');
+    kids.forEach((kid, i) => subtree(kid, childPrefix, i === kids.length - 1));
+  }
+
+  roots.forEach(root => {
+    lines.push(root.name + usageStr(root.name));
+    const kids = children[root.name] || [];
+    kids.forEach((kid, i) => subtree(kid, '', i === kids.length - 1));
+  });
+
+  pre.textContent = lines.join('\n');
+}
+
+// ============================================================
+// Diagnostics panel
+// ============================================================
+
+function setDiagnosticsPanelExpanded(expanded) {
+  const body = document.getElementById('diagPanelBody');
+  const chevron = document.getElementById('diagPanelChevron');
+  if (!body || !chevron) return;
+  body.classList.toggle('hidden', !expanded);
+  chevron.textContent = expanded ? '▾' : '▸';
+}
+
+function toggleDiagnosticsPanel(forceExpanded) {
+  const body = document.getElementById('diagPanelBody');
+  if (!body) return;
+  const expanded = typeof forceExpanded === 'boolean'
+    ? forceExpanded
+    : body.classList.contains('hidden');
+  setDiagnosticsPanelExpanded(expanded);
+}
+
+function initDiagnostics(data) {
+  const panel = document.getElementById('diagPanel');
+  _diagData = data;
+
+  if (!data || !data.models || data.models.length === 0) {
+    panel.classList.add('hidden');
+    setDiagnosticsPanelExpanded(false);
+    return;
+  }
+  panel.classList.remove('hidden');
+  setDiagnosticsPanelExpanded(false);
+
+  const sel = document.getElementById('diagModelSelect');
+  sel.innerHTML = '';
+  data.models.forEach((m, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = m.model + (m.bic != null ? ` (BIC=${m.bic.toFixed(1)})` : '');
+    sel.appendChild(opt);
+  });
+  // default to BioConsensus2 if available, then BioConsensus, otherwise last model
+  const bc2Idx = data.models.findIndex(m => m.model === 'BioConsensus2');
+  const bcIdx = data.models.findIndex(m => m.model === 'BioConsensus');
+  sel.value = bc2Idx >= 0 ? bc2Idx : bcIdx >= 0 ? bcIdx : data.models.length - 1;
+  renderDiagnostics();
+}
+
+function renderDiagnostics() {
+  const container = document.getElementById('diagContent');
+  container.innerHTML = '';
+  if (!_diagData || !_diagData.models) return;
+
+  const idx = parseInt(document.getElementById('diagModelSelect').value) || 0;
+  const m = _diagData.models[idx];
+  if (!m) return;
+
+  const r = m.residuals || {};
+  const u = m.block_usage || {};
+
+  const grid = document.createElement('div');
+  grid.className = 'diag-grid';
+
+  // ---- Residual section ----
+  const residSec = document.createElement('div');
+  residSec.className = 'diag-section';
+  residSec.innerHTML = `<h4>Residual Diagnostics</h4>`;
+
+  const rows = [
+    ['Good / Bad', `${r.n_good || 0} / ${r.n_bad || 0}`, ''],
+    ['Median error', (r.median_error||0).toFixed(5) + ' Da', ''],
+    ['Mean error', (r.mean_error||0).toFixed(5) + ' Da', ''],
+    ['Std dev', (r.std_error||0).toFixed(5) + ' Da', ''],
+    ['Mean ppm', (r.mean_ppm||0).toFixed(1), ppmClass(r.mean_ppm)],
+    ['Max ppm', (r.max_ppm||0).toFixed(1), ''],
+  ];
+  rows.forEach(([label, value, cls]) => {
+    const row = document.createElement('div');
+    row.className = 'diag-row';
+    row.innerHTML = `<span class="diag-label">${label}</span><span class="diag-value ${cls}">${value}</span>`;
+    residSec.appendChild(row);
+  });
+
+  // Bias badge
+  const biasDiv = document.createElement('div');
+  biasDiv.className = 'diag-row';
+  const biasOk = !r.bias_significant;
+  biasDiv.innerHTML = `<span class="diag-label">Mass bias</span>
+    <span><span class="diag-flag ${biasOk ? 'diag-flag-ok' : 'diag-flag-bad'}">${biasOk ? 'OK' : 'BIAS'}</span>
+    <span class="diag-value" style="margin-left:.3rem;">slope=${(r.bias_slope||0).toExponential(2)}</span></span>`;
+  residSec.appendChild(biasDiv);
+
+  grid.appendChild(residSec);
+
+  // ---- Block usage section ----
+  const usageSec = document.createElement('div');
+  usageSec.className = 'diag-section';
+  usageSec.innerHTML = `<h4>Block Usage Statistics</h4>`;
+
+  const uRows = [
+    ['Mean blocks/peak', (u.mean_blocks_per_peak||0).toFixed(2)],
+    ['Max blocks/peak', u.max_blocks_per_peak || 0],
+    ['Peaks (common only)', u.peaks_common_only || 0],
+  ];
+  uRows.forEach(([label, value]) => {
+    const row = document.createElement('div');
+    row.className = 'diag-row';
+    row.innerHTML = `<span class="diag-label">${label}</span><span class="diag-value">${value}</span>`;
+    usageSec.appendChild(row);
+  });
+
+  // Block table
+  if (u.blocks && u.blocks.length > 0) {
+    const tbl = document.createElement('table');
+    tbl.className = 'block-usage-table';
+    tbl.innerHTML = `<thead><tr><th>Block</th><th>Type</th><th>Used</th><th>Frac</th><th>Mean\u00d7</th><th>Max\u00d7</th></tr></thead>`;
+    const tbody = document.createElement('tbody');
+    u.blocks.forEach(b => {
+      const tr = document.createElement('tr');
+      if (b.flagged) tr.className = 'flagged';
+      tr.innerHTML = `
+        <td><strong>${b.name}</strong>${b.flagged ? ' <span class="diag-flag diag-flag-warn">\u26a0</span>' : ''}</td>
+        <td>${b.type}</td>
+        <td>${b.n_used}</td>
+        <td>${(b.frac_used*100).toFixed(0)}%</td>
+        <td>${b.mean_copies.toFixed(1)}</td>
+        <td>${b.max_copies}</td>`;
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    usageSec.appendChild(tbl);
+  }
+
+  if (u.n_flagged > 0) {
+    const warn = document.createElement('div');
+    warn.style.cssText = 'font-size:.74rem;color:var(--warn);margin-top:.35rem;';
+    const names = u.blocks.filter(b => b.flagged).map(b => b.name).join(', ');
+    warn.textContent = `\u26a0 ${names}: used by \u22642 peaks \u2014 possible over-fitting`;
+    usageSec.appendChild(warn);
+  }
+
+  // Co-occurrence (top 8)
+  if (u.co_occurrence && u.co_occurrence.length > 0) {
+    const h5 = document.createElement('div');
+    h5.style.cssText = 'font-size:.76rem;font-weight:600;margin-top:.5rem;color:var(--muted);';
+    h5.textContent = 'Block co-occurrence';
+    usageSec.appendChild(h5);
+
+    const ul = document.createElement('ul');
+    ul.className = 'coocc-list';
+    u.co_occurrence.slice(0, 8).forEach(e => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${e.blocks[0]} + ${e.blocks[1]}</span><span class="diag-value">${e.count}</span>`;
+      ul.appendChild(li);
+    });
+    usageSec.appendChild(ul);
+  }
+
+  grid.appendChild(usageSec);
+  container.appendChild(grid);
+}
+
+function fmtR2(v) { return v != null ? v.toFixed(8) : '\u2014'; }
+function r2Class(v) {
+  if (v == null) return '';
+  return v > 0.9999 ? 'diag-ok' : v > 0.999 ? '' : 'diag-warn';
+}
+function ppmClass(v) {
+  if (v == null) return '';
+  return v < 50 ? 'diag-ok' : v < 100 ? '' : 'diag-warn';
+}
+
+// ============================================================
+// Residual scatter charts (one per model)
+// ============================================================
+let _residualChartInstances = [];
+let _residualDiagData = null;
+let _biosynData = null;
+let _commonBlockMass = null;
+let _resultsSort = { index: -1, direction: 'asc' };
+let _biosynSort = { key: 'rank', direction: 'asc' };
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getSortIndicator(direction, active) {
+  if (!active) return '&#8597;';
+  return direction === 'asc' ? '&#9650;' : '&#9660;';
+}
+
+function parseSortableValue(value) {
+  if (value == null) return { type: 'empty', value: '' };
+  const text = String(value).trim();
+  if (!text || text === '\u2014') return { type: 'empty', value: '' };
+
+  const normalized = text.replace(/,/g, '');
+  if (/^-?\d+(?:\.\d+)?%$/.test(normalized)) {
+    return { type: 'number', value: parseFloat(normalized.slice(0, -1)) };
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(normalized)) {
+    return { type: 'number', value: parseFloat(normalized) };
+  }
+  return { type: 'text', value: text.toLowerCase() };
+}
+
+function compareSortableValues(a, b) {
+  if (a.type === 'empty' && b.type === 'empty') return 0;
+  if (a.type === 'empty') return 1;
+  if (b.type === 'empty') return -1;
+  if (a.type === 'number' && b.type === 'number') {
+    if (a.value === b.value) return 0;
+    return a.value < b.value ? -1 : 1;
+  }
+  const aText = String(a.value);
+  const bText = String(b.value);
+  if (aText === bText) return 0;
+  return aText.localeCompare(bText, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortRows(rows, getValue, sortState) {
+  if (!sortState || sortState.index < 0) return rows.slice();
+  const dir = sortState.direction === 'desc' ? -1 : 1;
+  return rows
+    .map((row, originalIndex) => ({ row, originalIndex }))
+    .sort((a, b) => {
+      const cmp = compareSortableValues(
+        parseSortableValue(getValue(a.row, a.originalIndex)),
+        parseSortableValue(getValue(b.row, b.originalIndex))
+      );
+      if (cmp !== 0) return cmp * dir;
+      return a.originalIndex - b.originalIndex;
+    })
+    .map(entry => entry.row);
+}
+
+function sortObjects(items, getValue, sortState) {
+  if (!sortState || !sortState.key) return items.slice();
+  const dir = sortState.direction === 'desc' ? -1 : 1;
+  return items
+    .map((item, originalIndex) => ({ item, originalIndex }))
+    .sort((a, b) => {
+      const cmp = compareSortableValues(
+        parseSortableValue(getValue(a.item, a.originalIndex)),
+        parseSortableValue(getValue(b.item, b.originalIndex))
+      );
+      if (cmp !== 0) return cmp * dir;
+      return a.originalIndex - b.originalIndex;
+    })
+    .map(entry => entry.item);
+}
+
+function toggleResultsSort(columnIndex) {
+  if (_resultsSort.index === columnIndex) {
+    _resultsSort.direction = _resultsSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    _resultsSort = { index: columnIndex, direction: 'asc' };
+  }
+  renderResultsHeader();
+  filterResults();
+}
+
+function renderResultsHeader() {
+  const thead = document.getElementById('resultsHead');
+  thead.innerHTML = '<tr>' + _headers.map((h, idx) => {
+    const active = _resultsSort.index === idx;
+    const indicator = getSortIndicator(_resultsSort.direction, active);
+    return `<th class="sortable-header${active ? ' sort-active' : ''}" onclick="toggleResultsSort(${idx})">${escapeHtml(h)}<span class="sort-indicator">${indicator}</span></th>`;
+  }).join('') + '</tr>';
+}
+
+function toggleBiosynSort(key) {
+  if (_biosynSort.key === key) {
+    _biosynSort.direction = _biosynSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    _biosynSort = { key, direction: 'asc' };
+  }
+  renderBiosynthetic(_biosynData);
+}
+
+function renderBiosynHeader() {
+  const headers = [
+    { label: 'Rank', key: 'rank' },
+    { label: 'Model', key: 'model' },
+    { label: 'BIC', key: 'bic' },
+    { label: 'Score ↑', key: 'score' },
+    { label: 'N Good', key: 'n_good' },
+    { label: 'Direct links', key: 'n_clean', title: 'Total single-step links in the full network' },
+    { label: 'Avg direct links', key: 'avg_clean_degree', title: 'Average single-step links per peak' },
+    { label: 'Main-group coverage', key: 'reachability', title: 'Fraction of peaks in the largest single-step connected group' },
+    { label: 'Link groups', key: 'n_clean_components', title: 'Number of connected groups when using only single-step links' },
+    { label: 'Backbone', key: 'n_mst_edges', title: 'Backbone links in the minimum-spanning tree' },
+    { label: 'D/S/M/X', key: 'mst_breakdown', title: 'Direct/Skip/Multi/Mixed' },
+    { label: 'Backbone pen.', key: 'mst_mean_penalty', title: 'Average backbone penalty (lower is better)' }
+  ];
+  const thead = document.querySelector('#biosynTable thead');
+  thead.innerHTML = '<tr>' + headers.map(h => {
+    const active = _biosynSort.key === h.key;
+    const indicator = getSortIndicator(_biosynSort.direction, active);
+    const titleAttr = h.title ? ` title="${escapeHtml(h.title)}"` : '';
+    return `<th${titleAttr} class="sortable-header${active ? ' sort-active' : ''}" onclick="toggleBiosynSort('${h.key}')">${h.label}<span class="sort-indicator">${indicator}</span></th>`;
+  }).join('') + '</tr>';
+}
+
+function getBiosynSortValue(model, key) {
+  const net = model.network || {};
+  switch (key) {
+    case 'n_clean': return net.n_clean || 0;
+    case 'avg_clean_degree': return net.avg_clean_degree || 0;
+    case 'reachability': return net.clean_reachability || 0;
+    case 'n_clean_components': return net.n_clean_components || 0;
+    case 'mst_breakdown': return `${model.mst_clean || 0}/${model.mst_skip || 0}/${model.mst_multi || 0}/${model.mst_mixed || 0}`;
+    default: return model[key];
+  }
+}
+
+function renderResidualCharts(data) {
+  const panel = document.getElementById('residualChartsPanel');
+  _residualDiagData = data;
+
+  // Destroy previous chart instances
+  _residualChartInstances.forEach(c => c.destroy());
+  _residualChartInstances = [];
+  document.getElementById('residualChartsContainer').innerHTML = '';
+
+  if (!data || !data.models || data.models.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  panel.classList.remove('hidden');
+
+  // Populate dropdown
+  const sel = document.getElementById('residChartModelSelect');
+  sel.innerHTML = '<option value="__all__">All models</option>';
+  data.models.forEach((m, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = m.model + (m.bic != null ? ' (BIC=' + m.bic.toFixed(1) + ')' : '');
+    sel.appendChild(opt);
+  });
+  // Default to BioConsensus2 if available, then BioConsensus, otherwise last model
+  const bc2ResidIdx = data.models.findIndex(m => m.model === 'BioConsensus2');
+  const bcResidIdx = data.models.findIndex(m => m.model === 'BioConsensus');
+  sel.value = bc2ResidIdx >= 0 ? bc2ResidIdx : bcResidIdx >= 0 ? bcResidIdx : data.models.length - 1;
+
+  filterResidualCharts();
+}
+
+function filterResidualCharts() {
+  if (!_residualDiagData || !_residualDiagData.models) return;
+
+  const container = document.getElementById('residualChartsContainer');
+  container.innerHTML = '';
+  _residualChartInstances.forEach(c => c.destroy());
+  _residualChartInstances = [];
+
+  const sel = document.getElementById('residChartModelSelect');
+  const yScaleSel = document.getElementById('residChartYScale');
+  const chosen = sel.value;
+  const yScaleMode = yScaleSel ? yScaleSel.value : 'auto';
+  const models = _residualDiagData.models;
+
+  const toRender = chosen === '__all__'
+    ? models.map((m, i) => ({m, i}))
+    : [{m: models[parseInt(chosen)], i: parseInt(chosen)}];
+
+  toRender.forEach(({m, i}) => {
+    if (!m) return;
+    const points = m.peak_points;
+    if (!points || points.length === 0) return;
+
+    const card = document.createElement('div');
+    card.className = 'residual-chart-card';
+
+    const title = document.createElement('h4');
+    title.textContent = m.model + (m.bic != null ? '  (BIC = ' + m.bic.toFixed(1) + ')' : '');
+    card.appendChild(title);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'residual-chart-wrap';
+    const canvas = document.createElement('canvas');
+    canvas.id = 'residChart_' + i;
+    wrap.appendChild(canvas);
+    card.appendChild(wrap);
+    container.appendChild(card);
+
+    // Build a set of peak IDs with clean_degree === 0 from biosynthetic data
+    const zeroDegPeaks = new Set();
+    if (_biosynData && _biosynData.models) {
+      const bioModel = _biosynData.models.find(bm => bm.model === m.model);
+      if (bioModel && bioModel.chain) {
+        bioModel.chain.forEach(n => { if (n.clean_degree === 0) zeroDegPeaks.add(n.peak_id); });
+      }
+    }
+
+    const goodPts    = points.filter(p => p.status === 'GOOD' && !zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
+    const goodZeroPts = points.filter(p => p.status === 'GOOD' && zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
+    const badPts     = points.filter(p => p.status !== 'GOOD').map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
+
+    const allMz = points.map(p => p.mz);
+    const xMinRaw = Math.min(...allMz);
+    const xMaxRaw = Math.max(...allMz);
+    const xRange = xMaxRaw - xMinRaw || 100;
+    const niceSteps = [100, 200, 250, 500, 1000, 2000, 2500, 5000];
+    const xStep = niceSteps.find(s => xRange / s <= 12) || niceSteps[niceSteps.length - 1];
+    const xMin = Math.floor(xMinRaw / xStep) * xStep;
+    const xMax = Math.ceil(xMaxRaw / xStep) * xStep;
+
+    let yScaleOptions = {};
+    if (yScaleMode === 'good' && (goodPts.length > 0 || goodZeroPts.length > 0)) {
+      const allGoodErrs = goodPts.map(p => p.y).concat(goodZeroPts.map(p => p.y));
+      const yMinGood = Math.min(...allGoodErrs);
+      const yMaxGood = Math.max(...allGoodErrs);
+      const ySpan = yMaxGood - yMinGood;
+      const yPad = ySpan > 0 ? ySpan * 0.1 : Math.max(Math.abs(yMinGood) * 0.1, 0.05);
+      yScaleOptions = {
+        min: yMinGood - yPad,
+        max: yMaxGood + yPad,
+      };
+    }
+
+    const chart = new Chart(canvas, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            label: 'GOOD',
+            data: goodPts,
+            backgroundColor: '#16a34a',
+            borderColor: '#15803d',
+            borderWidth: 1,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+          },
+          {
+            label: 'GOOD (0 direct links)',
+            data: goodZeroPts,
+            backgroundColor: '#eab308',
+            borderColor: '#ca8a04',
+            borderWidth: 1,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+          },
+          {
+            label: 'BAD',
+            data: badPts,
+            backgroundColor: '#dc2626',
+            borderColor: '#b91c1c',
+            borderWidth: 1,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const pt = ctx.dataset.data[ctx.dataIndex];
+                const pid = pt && pt.pid != null ? ' #' + pt.pid : '';
+                return ctx.dataset.label + pid + ': m/z=' + ctx.parsed.x.toFixed(3) + ', error=' + ctx.parsed.y.toFixed(5);
+              }
+            }
+          },
+          annotation: {
+            annotations: {
+              zeroLine: {
+                type: 'line',
+                yMin: 0, yMax: 0,
+                borderColor: '#6b7280',
+                borderWidth: 1.5,
+                borderDash: [6, 3],
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            title: { display: true, text: 'm/z', font: { size: 12, weight: 'bold' } },
+            min: xMin, max: xMax,
+            ticks: { stepSize: xStep },
+          },
+          y: {
+            title: { display: true, text: 'Mass error (Da)', font: { size: 12, weight: 'bold' } },
+            ...yScaleOptions,
+          },
+        },
+      },
+    });
+    _residualChartInstances.push(chart);
+  });
+}
+</script>
+</body>
+</html>

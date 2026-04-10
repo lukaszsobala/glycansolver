@@ -1,0 +1,52 @@
+# name	mass	category	max_limit	glycan_type	full_name
+# category: common = universal monosaccharides (try first)
+#           mod    = modifications (try second)
+#           rare   = unusual sugar residues (try last)
+# max_limit: optional default cap on copies per peak (omit to use built-in default)
+# glycan_type: native (default), permethylated, peracetylated
+# full_name: optional human-readable name (shown on hover in the web UI)
+#
+# ---- Native glycans ----
+_free_red_end	18.0105546	meta	0	native	Free reducing end
+Hex	162.052824	common	10	native	Hexose
+dHex	146.05791	common	3	native	Deoxyhexose
+HexNAc	203.079374	common	8	native	N-Acetylhexosamine
+NeuAc	291.095419	common	4	native	N-Acetylneuraminic acid
+NeuGc	307.090334	rare	4	native	N-Glycolylneuraminic acid
+KDN	250.068870	rare	4	native	Deaminoneuraminic acid
+HexA	176.03209	rare	4	native	Hexuronic acid
+dHexNAc	187.084459	rare	4	native	N-Acetyldeoxyhexosamine
+Pent	132.04226	rare	4	native	Pentose
+dPent	116.047345	rare	4	native	Deoxypentose
+Tet	102.031695	rare	4	native	Tetrose
+PhSu	79.961	mod	1	native	Phosphate or sulfate
+Ac	42.01111	mod	1	native	Acetyl
+PC	182.058207	mod	1	native	Phosphorylcholine
+PEA	139.003447	mod	1	native	Phosphoethanolamine
+#
+# ---- Permethylated glycans ----
+_free_red_end	46.0419	meta	0	permethylated	Free reducing end
+Hex	204.0998	common	10	permethylated	Hexose
+dHex	174.0892	common	3	permethylated	Deoxyhexose
+HexNAc	245.1263	common	8	permethylated	N-Acetylhexosamine
+NeuAc	361.1737	common	4	permethylated	N-Acetylneuraminic acid
+NeuGc	391.1842	rare	4	permethylated	N-Glycolylneuraminic acid
+KDN	320.1472	rare	4	permethylated	Deaminoneuraminic acid
+HexA	218.079	rare	4	permethylated	Hexuronic acid
+dHexNAc	217.095059	rare	4	permethylated	N-Acetyldeoxyhexosamine
+Pent	160.0736	rare	4	permethylated	Pentose
+Tet	116.0474	rare	4	permethylated	Tetrose
+Ph	93.982	mod	1	permethylated	Phosphate
+Su	65.9412	mod	1	permethylated	Sulfate
+#
+# ---- Peracetylated glycans ----
+_free_red_end	102.0317	meta	0	peracetylated	Free reducing end
+Hex	288.0845	common	10	peracetylated	Hexose
+dHex	230.079	common	3	peracetylated	Deoxyhexose
+HexNAc	287.1005	common	8	peracetylated	N-Acetylhexosamine
+NeuAc	417.1271	common	4	peracetylated	N-Acetylneuraminic acid
+NeuGc	475.1326	rare	4	peracetylated	N-Glycolylneuraminic acid
+KDN	376.1006	rare	4	peracetylated	Deaminoneuraminic acid
+HexA	260.0532	rare	4	peracetylated	Hexuronic acid
+Pent	216.0634	rare	4	peracetylated	Pentose
+PhSu	37.95105	mod	1	peracetylated	Phosphate or sulfate
