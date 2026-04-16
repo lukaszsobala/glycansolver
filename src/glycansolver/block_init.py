@@ -57,13 +57,39 @@ def get_smart_block_init(
     # Keep track of filtered candidates and reasons
     filtered_candidates = []
 
-    # Filter out differences too close to known blocks AND their multiples
+    # Build an extended reference set: user-specified known blocks PLUS
+    # all dictionary blocks.  This ensures the combination filter catches
+    # e.g. HexNAc + dHex even when only Hex was specified as known.
+    all_reference_masses = list(known_differential)
+    _ref_set = set(round(m, 6) for m in known_differential)
+    for dict_mass in blocks_dict:
+        if round(dict_mass, 6) not in _ref_set:
+            all_reference_masses.append(dict_mass)
+            _ref_set.add(round(dict_mass, 6))
+    all_reference_masses = np.array(all_reference_masses)
+
+    # Build name lookup for verbose messages
+    _ref_name = {}
+    for m in known_differential:
+        _ref_name[round(m, 6)] = f"{m:.3f}"
+    for dict_mass, dict_name in blocks_dict.items():
+        _ref_name[round(dict_mass, 6)] = f"{dict_name}({dict_mass:.3f})"
+
+    def _ref_label(mass):
+        return _ref_name.get(round(mass, 6), f"{mass:.3f}")
+
+    # Filter out differences too close to known blocks AND their multiples,
+    # and combinations of dictionary blocks (2+ blocks together).
+    # NOTE: single-block checks use only user-specified known blocks so that
+    # individual dictionary blocks (dHex, HexNAc, etc.) remain discoverable.
+    # Multi-block combination/difference checks use all_reference_masses to
+    # catch e.g. HexNAc + dHex even when only Hex is user-specified.
     filtered_diffs = []
     for diff in diffs:
         too_close = False
         filter_reason = ""
 
-        # Check against original known blocks
+        # Check against user-specified known blocks only (not full dictionary)
         for known in known_differential:
             if abs(diff - known) < min_gap:
                 too_close = True
@@ -84,17 +110,20 @@ def get_smart_block_init(
             if too_close:
                 break
 
-        # Check against combinations of known blocks (up to 3+3 of each)
-        if not too_close and len(known_differential) >= 2:
+        # Check against combinations of reference blocks (known + dictionary).
+        # Only multi-block combinations (count1+count2 >= 2) are checked here
+        # so that individual dictionary blocks are NOT filtered out.
+        if not too_close and len(all_reference_masses) >= 2:
             # Check all combinations where each block can appear 0 to 3 times
-            for i, known1 in enumerate(known_differential):
+            for i, known1 in enumerate(all_reference_masses):
                 for j, known2 in enumerate(
-                    known_differential[i:], i
+                    all_reference_masses[i:], i
                 ):  # Start from i to avoid duplicates
                     for count1 in range(4):  # 0 to 3 copies of first block
                         for count2 in range(4):  # 0 to 3 copies of second block
-                            # Skip the (0,0) case as it would filter out everything
-                            if count1 == 0 and count2 == 0:
+                            # Require at least 2 total blocks to avoid
+                            # filtering out single dictionary entries
+                            if count1 + count2 < 2:
                                 continue
 
                             combined = count1 * known1 + count2 * known2
@@ -104,10 +133,10 @@ def get_smart_block_init(
                                 abs(diff - combined) < min_gap
                             ):  # the data precision will not depend on the number of blocks
                                 too_close = True
-                                filter_reason = f"Combination of {count1}x{known1:.3f} + {count2}x{known2:.3f}"
+                                filter_reason = f"Combination of {count1}x{_ref_label(known1)} + {count2}x{_ref_label(known2)}"
                                 if verbose:
                                     print(
-                                        f"Filtered out {diff:.3f} as combination of {count1}x{known1:.3f} + {count2}x{known2:.3f}"
+                                        f"Filtered out {diff:.3f} as combination of {count1}x{_ref_label(known1)} + {count2}x{_ref_label(known2)}"
                                     )
                                 break
                         if too_close:
@@ -117,10 +146,10 @@ def get_smart_block_init(
                 if too_close:
                     break
 
-        # Check against differences between known blocks (only positive differences)
-        if not too_close and len(known_differential) >= 2:
-            for i, known1 in enumerate(known_differential):
-                for j, known2 in enumerate(known_differential):
+        # Check against differences between reference blocks (only positive differences)
+        if not too_close and len(all_reference_masses) >= 2:
+            for i, known1 in enumerate(all_reference_masses):
+                for j, known2 in enumerate(all_reference_masses):
                     if i != j:  # Don't compare a block with itself
                         # Only consider positive differences where first value > second value
                         if known1 > known2:
@@ -130,11 +159,11 @@ def get_smart_block_init(
                             if abs(diff - block_diff) < min_gap:
                                 too_close = True
                                 filter_reason = (
-                                    f"Difference between {known1:.3f} and {known2:.3f}"
+                                    f"Difference between {_ref_label(known1)} and {_ref_label(known2)}"
                                 )
                                 if verbose:
                                     print(
-                                        f"Filtered out {diff:.3f} as difference between {known1:.3f} and {known2:.3f}"
+                                        f"Filtered out {diff:.3f} as difference between {_ref_label(known1)} and {_ref_label(known2)}"
                                     )
                                 break
                 if too_close:
@@ -296,23 +325,10 @@ def get_smart_block_init(
         for median, score, size, cluster, _ in ranked_clusters
     ]
 
-    # Special handling for when we have multiple unknown blocks
-    if k_unknown >= 2 and len(ranked_clusters) >= k_unknown:
-        # Get the top candidate - it will be treated separately
-        top_candidate = ranked_clusters[0][0]
-        # Get the rest of the needed candidates
-        remaining_candidates = [ranked_clusters[i][0] for i in range(1, k_unknown)]
-        selected_medians = [top_candidate] + remaining_candidates
-
-        # Flag to indicate that the first unknown block should be treated as known
-        # We'll return this information for the optimization stage
-        treat_first_as_known = True
-    else:
-        # Standard selection of the top k_unknown candidates
-        selected_medians = [
-            median for median, _, _, _, _ in ranked_clusters[:k_unknown]
-        ]
-        treat_first_as_known = False
+    # Select the top k_unknown candidates
+    selected_medians = [
+        median for median, _, _, _, _ in ranked_clusters[:k_unknown]
+    ]
 
     print(f"\nSelected block estimates: {[f'{x:.3f}' for x in selected_medians]}")
 
@@ -325,14 +341,9 @@ def get_smart_block_init(
                         f"Selected block {i + 1} ({median:.3f}) matches dictionary entry '{name}' ({mass:.5f})"
                     )
 
-    if treat_first_as_known and k_unknown >= 2:
-        print(
-            f"First unknown block ({selected_medians[0]:.3f}) will be treated as known during optimization"
-        )
-
     return (
         np.array(selected_medians),
-        treat_first_as_known,
+        False,
         all_candidates,
         ranked_clusters_compat,
         filtered_candidates,

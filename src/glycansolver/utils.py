@@ -400,7 +400,7 @@ def write_exhaustive_tsv_output(
             sorted_models = sorted(
                 [(lbl, res) for lbl, res in exhaustive_results.items()
                  if res is not None],
-                key=lambda x: (x[1]["n_blocks"], x[1]["bic"]),
+                key=lambda x: (x[1]["n_blocks"], x[1]["bic"] if x[1]["bic"] is not None else float("inf")),
             )
 
             # ---- rows ----
@@ -456,7 +456,7 @@ def write_exhaustive_tsv_output(
                         f"{observations[i]:.5f}",
                         model_label,
                         str(res["n_blocks"]),
-                        f"{res['bic']:.2f}",
+                        f"{res['bic']:.2f}" if res['bic'] is not None else "",
                         f"{recon_obs:.5f}",
                         f"{recon_theor:.5f}",
                         f"{err:.5f}",
@@ -602,7 +602,7 @@ def write_multimodel_tsv_output(
                         f"{observations[i]:.5f}",
                         model_label,
                         str(m),
-                        f"{bic:.2f}",
+                        f"{bic:.2f}" if bic is not None else "",
                         f"{recon_obs:.5f}",
                         f"{recon_theor:.5f}",
                         f"{err:.5f}",

@@ -899,6 +899,410 @@ def _build_bio_consensus2(
 
 
 # ---------------------------------------------------------------------------
+# BioConsensus3 – dependency-aware SA consensus
+# ---------------------------------------------------------------------------
+
+def _build_bio_consensus3(
+    observations: np.ndarray,
+    common_block: float,
+    b: np.ndarray,
+    final_names: list[str],
+    k_total: int,
+    k_known: int,
+    known_mass_limits: list[int],
+    max_known: int,
+    max_unknown: int,
+    tolerance: float,
+    final_tolerance: float,
+    dep_info: dict,
+    dep_weight: float = 0.3,
+    dep_confidence_threshold: float = 0.5,
+    hard_prune: bool = False,
+):
+    """Select per-peak compositions via SA with dependency constraints.
+
+    Extends BioConsensus2 by incorporating the block dependency DAG
+    inferred by ``block_dependencies.py``.  Compositions that violate
+    known biosynthetic prerequisites are penalised in the SA scoring
+    (soft constraints).  Optionally, high-confidence violations can be
+    pruned during enumeration (hard constraints).
+
+    Parameters
+    ----------
+    dep_info : dict
+        Output of ``infer_block_dependencies()``.
+    dep_weight : float
+        Relative importance of the dependency-compliance term (default 0.3).
+    dep_confidence_threshold : float
+        Minimum ``n_models_used / n_models_with_block`` ratio to trust a
+        dependency edge.  Dependencies below this threshold are ignored.
+    hard_prune : bool
+        If True, remove compositions that violate high-confidence
+        dependencies during enumeration.
+
+    Returns
+    -------
+    consensus_x : np.ndarray, shape (n, k_total)
+    consensus_errors : np.ndarray, shape (n,)
+    all_peak_alternatives : list[list[tuple[tuple[int,...], float]]]
+    """
+    n = len(observations)
+    rng = _random_mod.Random(42)
+
+    # ---- Build dependency lookup structures ----
+    prerequisites = dep_info.get("prerequisites", {})
+    usage_info = dep_info.get("usage_info", {})
+
+    # name → column index
+    name_to_idx = {name: idx for idx, name in enumerate(final_names)}
+
+    # Build trusted prerequisite map: block_col → set of prerequisite cols.
+    # Only include edges whose confidence exceeds the threshold.
+    trusted_prereqs: dict[int, set[int]] = {}
+    for block_name, prereq_names in prerequisites.items():
+        if block_name not in name_to_idx:
+            continue
+        b_idx = name_to_idx[block_name]
+        usage = usage_info.get(block_name, {})
+        n_with = usage.get("n_models_with_block", 0)
+        n_used = usage.get("n_models_used", 0)
+
+        # Skip blocks that were never used — their prerequisites are
+        # meaningless (false-root edge case).
+        if n_used == 0:
+            continue
+
+        trusted = set()
+        for pname in prereq_names:
+            if pname not in name_to_idx:
+                continue
+            p_idx = name_to_idx[pname]
+            # Check confidence: was the prerequisite consistently present?
+            # The prerequisite comes from intersection, so by definition
+            # it was present in every context where block was used.
+            # We gate on the block's own usage confidence instead.
+            if n_with > 0 and n_used / n_with >= dep_confidence_threshold:
+                trusted.add(p_idx)
+        if trusted:
+            trusted_prereqs[b_idx] = trusted
+
+    # ---- Dependency consistency score for a single composition ----
+    def _dep_score(comp: tuple) -> float:
+        """Return +1 per satisfied dependency, -1 per violation."""
+        score = 0.0
+        for b_idx, prereq_cols in trusted_prereqs.items():
+            if comp[b_idx] > 0:
+                for p_col in prereq_cols:
+                    if comp[p_col] > 0:
+                        score += 1.0
+                    else:
+                        score -= 1.0
+        return score
+
+    # ---- Dependency violation check (for hard pruning) ----
+    def _violates_deps(comp: tuple) -> bool:
+        for b_idx, prereq_cols in trusted_prereqs.items():
+            if comp[b_idx] > 0:
+                for p_col in prereq_cols:
+                    if comp[p_col] == 0:
+                        return True
+        return False
+
+    n_dep_edges = sum(len(v) for v in trusted_prereqs.values())
+    print(f"    Dependency constraints: {n_dep_edges} trusted edges "
+          f"across {len(trusted_prereqs)} blocks "
+          f"(confidence >= {dep_confidence_threshold})")
+
+    # ---- Per-block limits ----
+    limits: list[int] = []
+    for j in range(k_total):
+        if j < k_known:
+            lim = known_mass_limits[j] if j < len(known_mass_limits) else max_known
+        else:
+            lim = max_unknown
+        limits.append(lim)
+
+    # ---- Step 1: enumerate compositions per peak ----
+    all_peak_alternatives: list[list[tuple[tuple[int, ...], float]]] = []
+    n_pruned_total = 0
+    for i in range(n):
+        target = observations[i] - common_block
+        comps = _enumerate_compositions_for_peak(target, b, limits, final_tolerance)
+
+        # Hard pruning: remove dependency-violating compositions
+        if hard_prune and trusted_prereqs:
+            before = len(comps)
+            comps = [c for c in comps if not _violates_deps(c[0])]
+            n_pruned_total += before - len(comps)
+
+        all_peak_alternatives.append(
+            comps if comps else [(tuple(0 for _ in range(k_total)), float("inf"))]
+        )
+
+    n_with_alts = sum(1 for a in all_peak_alternatives if len(a) > 1)
+    n_total = sum(len(a) for a in all_peak_alternatives)
+    print(f"    Enumerated {n_total} compositions across {n} peaks "
+          f"({n_with_alts} have multiple alternatives)")
+    if hard_prune and n_pruned_total > 0:
+        print(f"    Hard-pruned {n_pruned_total} dependency-violating compositions")
+
+    # ---- Helper: canonical step vector (L₁ ≤ 2 or None) ----
+    def _step_vector(comp_a: tuple, comp_b: tuple):
+        d = tuple(cb - ca for ca, cb in zip(comp_a, comp_b))
+        l1 = sum(abs(x) for x in d)
+        if l1 < 1 or l1 > 2:
+            return None
+        d_neg = tuple(-x for x in d)
+        return max(d, d_neg)
+
+    # ---- Early exit if nothing to optimise ----
+    movable = [i for i in range(n) if len(all_peak_alternatives[i]) > 1]
+    if not movable:
+        consensus_x = np.zeros((n, k_total))
+        consensus_errors = np.zeros(n)
+        for i in range(n):
+            consensus_x[i] = list(all_peak_alternatives[i][0][0])
+            recon = common_block + float(np.dot(consensus_x[i], b))
+            consensus_errors[i] = abs(observations[i] - recon)
+        print("    No peaks with multiple alternatives — skipping SA")
+        return consensus_x, consensus_errors, all_peak_alternatives
+
+    # ---- Step 2: simulated annealing with dependency scoring ----
+    state = [0] * n  # lowest-error composition per peak
+
+    # Build initial step-frequency table
+    step_freq: Counter = Counter()
+    for i in range(n):
+        ci = all_peak_alternatives[i][0][0]
+        for j in range(i + 1, n):
+            cj = all_peak_alternatives[j][0][0]
+            sv = _step_vector(ci, cj)
+            if sv is not None:
+                step_freq[sv] += 1
+
+    ERR_WEIGHT = 0.1
+    DEP_WEIGHT = dep_weight
+
+    def _quality(peak_idx: int, alt_idx: int) -> float:
+        err = all_peak_alternatives[peak_idx][alt_idx][1]
+        if err >= final_tolerance:
+            return -1.0
+        return 1.0 - err / final_tolerance
+
+    # Initial score includes dependency term
+    current_score = float(
+        sum(f * f for f in step_freq.values())
+        + ERR_WEIGHT * sum(_quality(i, state[i]) for i in range(n))
+        + DEP_WEIGHT * sum(
+            _dep_score(all_peak_alternatives[i][state[i]][0])
+            for i in range(n)
+        )
+    )
+    best_state = list(state)
+    best_score = current_score
+
+    # SA parameters
+    n_sa_steps = min(200_000, max(50_000, n_total * 200))
+    T_init = max(10.0, best_score * 0.05) if best_score > 0 else 10.0
+    T_min = 0.01
+    alpha = (T_min / T_init) ** (1.0 / n_sa_steps)
+    T = T_init
+
+    print(f"    SA: {n_sa_steps} steps, T={T_init:.1f}→{T_min}, "
+          f"{len(movable)} movable peaks, "
+          f"DEP_WEIGHT={DEP_WEIGHT}")
+
+    n_accepted = 0
+    n_improved = 0
+
+    for _step_num in range(n_sa_steps):
+        peak = rng.choice(movable)
+        n_alts = len(all_peak_alternatives[peak])
+        new_idx = rng.randint(0, n_alts - 2)
+        if new_idx >= state[peak]:
+            new_idx += 1
+
+        old_comp = all_peak_alternatives[peak][state[peak]][0]
+        new_comp = all_peak_alternatives[peak][new_idx][0]
+
+        # Net step-frequency changes from switching this peak
+        net_changes: dict[tuple, int] = defaultdict(int)
+        for j in range(n):
+            if j == peak:
+                continue
+            cj = all_peak_alternatives[j][state[j]][0]
+            sv_old = _step_vector(old_comp, cj)
+            sv_new = _step_vector(new_comp, cj)
+            if sv_old == sv_new:
+                continue
+            if sv_old is not None:
+                net_changes[sv_old] -= 1
+            if sv_new is not None:
+                net_changes[sv_new] += 1
+
+        # Score delta: connectivity + error + dependency
+        delta = ERR_WEIGHT * (
+            _quality(peak, new_idx) - _quality(peak, state[peak])
+        )
+        delta += DEP_WEIGHT * (
+            _dep_score(new_comp) - _dep_score(old_comp)
+        )
+        for sv, dc in net_changes.items():
+            old_f = step_freq.get(sv, 0)
+            new_f = old_f + dc
+            delta += new_f * new_f - old_f * old_f
+
+        # Metropolis acceptance
+        if delta > 0 or (T > 0 and rng.random() < math.exp(delta / T)):
+            state[peak] = new_idx
+            for sv, dc in net_changes.items():
+                step_freq[sv] += dc
+                if step_freq[sv] == 0:
+                    del step_freq[sv]
+            current_score += delta
+            n_accepted += 1
+            if current_score > best_score:
+                best_state = list(state)
+                best_score = current_score
+                n_improved += 1
+
+        T *= alpha
+
+    print(f"    SA done: {n_accepted} accepted, {n_improved} improvements, "
+          f"score {best_score:.1f}")
+
+    # ---- Build result from best_state ----
+    consensus_x = np.zeros((n, k_total))
+    consensus_errors = np.zeros(n)
+    for i in range(n):
+        comp = all_peak_alternatives[i][best_state[i]][0]
+        consensus_x[i] = list(comp)
+        recon = common_block + float(np.dot(consensus_x[i], b))
+        consensus_errors[i] = abs(observations[i] - recon)
+
+    # ---- Report top biosynthetic steps ----
+    final_freq: Counter = Counter()
+    for i in range(n):
+        ci = all_peak_alternatives[i][best_state[i]][0]
+        for j in range(i + 1, n):
+            cj = all_peak_alternatives[j][best_state[j]][0]
+            sv = _step_vector(ci, cj)
+            if sv is not None:
+                final_freq[sv] += 1
+
+    if final_freq:
+        print("    Top biosynthetic steps:")
+        for sv, count in final_freq.most_common(10):
+            parts = []
+            for r in range(k_total):
+                if sv[r] > 0:
+                    parts.append(f"+{sv[r]}{final_names[r]}")
+                elif sv[r] < 0:
+                    parts.append(f"{sv[r]}{final_names[r]}")
+            step_str = " ".join(parts) if parts else "(none)"
+            print(f"      {step_str}: {count} pair(s)")
+
+    # ---- Dependency violation report ----
+    n_violations = 0
+    n_peaks_violating = 0
+    for i in range(n):
+        comp = all_peak_alternatives[i][best_state[i]][0]
+        ds = _dep_score(comp)
+        if ds < 0:
+            n_peaks_violating += 1
+            # Count individual violations
+            for b_idx, prereq_cols in trusted_prereqs.items():
+                if comp[b_idx] > 0:
+                    for p_col in prereq_cols:
+                        if comp[p_col] == 0:
+                            n_violations += 1
+    if n_violations > 0:
+        print(f"\n    Dependency violations remaining: {n_violations} "
+              f"across {n_peaks_violating} peak(s)")
+        for i in range(n):
+            comp = all_peak_alternatives[i][best_state[i]][0]
+            for b_idx, prereq_cols in trusted_prereqs.items():
+                if comp[b_idx] > 0:
+                    for p_col in prereq_cols:
+                        if comp[p_col] == 0:
+                            print(
+                                f"      Peak {i+1} ({observations[i]:.3f}): "
+                                f"{final_names[b_idx]} present but "
+                                f"prerequisite {final_names[p_col]} absent"
+                            )
+    else:
+        print("\n    No dependency violations in final solution")
+
+    # ---- Per-peak alternative scoring ----
+    print("\n    Per-peak alternative scores "
+          "(connectivity + quality + dependency):")
+    n_ambiguous = 0
+    n_clear_winner = 0
+    margin_ratios = []
+
+    for i in range(n):
+        alts = all_peak_alternatives[i]
+        if len(alts) <= 1:
+            continue
+
+        alt_scores = []
+        for ai, (comp_i, err_i) in enumerate(alts):
+            conn = 0
+            for j in range(n):
+                if j == i:
+                    continue
+                cj = all_peak_alternatives[j][best_state[j]][0]
+                sv = _step_vector(comp_i, cj)
+                if sv is not None:
+                    conn += 1
+            qual = (1.0 - err_i / final_tolerance) if err_i < final_tolerance else -1.0
+            dep = _dep_score(comp_i)
+            total = conn + ERR_WEIGHT * qual + DEP_WEIGHT * dep
+            alt_scores.append((ai, comp_i, err_i, conn, qual, dep, total))
+
+        alt_scores.sort(key=lambda x: -x[6])
+        chosen_ai = best_state[i]
+
+        if len(alt_scores) >= 2:
+            margin = alt_scores[0][6] - alt_scores[1][6]
+            margin_ratios.append(margin)
+            if margin < 0.5:
+                n_ambiguous += 1
+            else:
+                n_clear_winner += 1
+        else:
+            n_clear_winner += 1
+
+        chosen_comp = alts[chosen_ai][0]
+        chosen_parts = [f"{c}{final_names[r]}"
+                        for r, c in enumerate(chosen_comp) if c > 0]
+        print(f"    Peak {i+1} ({observations[i]:.3f}) — "
+              f"{len(alts)} alternatives, "
+              f"chose: {' + '.join(chosen_parts) if chosen_parts else '(empty)'}")
+        for ai, comp_i, err_i, conn, qual, dep, total in alt_scores[:5]:
+            parts = [f"{c}{final_names[r]}"
+                     for r, c in enumerate(comp_i) if c > 0]
+            tag = " <-- selected" if ai == chosen_ai else ""
+            print(f"      {' + '.join(parts) if parts else '(empty)':40s}  "
+                  f"conn={conn:2d}  qual={qual:+.2f}  "
+                  f"dep={dep:+.1f}  "
+                  f"score={total:.2f}  err={err_i:.4f}{tag}")
+        if len(alt_scores) > 5:
+            print(f"      ... and {len(alt_scores) - 5} more alternatives")
+
+    n_multi = sum(1 for a in all_peak_alternatives if len(a) > 1)
+    print(f"\n    Score summary: {n_multi} peaks with multiple alternatives")
+    if margin_ratios:
+        print(f"      Clear winner (margin >= 0.5): {n_clear_winner}")
+        print(f"      Ambiguous    (margin <  0.5): {n_ambiguous}")
+        print(f"      Margin: min={min(margin_ratios):.2f}, "
+              f"median={sorted(margin_ratios)[len(margin_ratios)//2]:.2f}, "
+              f"max={max(margin_ratios):.2f}")
+
+    return consensus_x, consensus_errors, all_peak_alternatives
+
+
+# ---------------------------------------------------------------------------
 # Exhaustive model comparison – test every non-empty subset of blocks
 # ---------------------------------------------------------------------------
 
@@ -1545,6 +1949,7 @@ def solve_progressive(
 
     best_model = baseline
     selected_unknowns = []          # list of (mass, name)
+    selected_unknown_cand_indices = []  # parallel list: candidate index per selected unknown
     used_candidate_indices = set()
     current_common = baseline["common"]
 
@@ -1702,6 +2107,7 @@ def solve_progressive(
         if candidate_used and ((bic_improvement > MIN_BIC_DELTA and peaks_improvement >= 1) or peaks_improvement >= 2):
             used_candidate_indices.add(best_idx)
             selected_unknowns.append((refined_mass, block_name))
+            selected_unknown_cand_indices.append(best_idx)
             best_model = best_result
             current_common = best_result["common"]
             print(f"  ✓ ACCEPTED — model now has {k_known + len(selected_unknowns)} blocks")
@@ -1709,6 +2115,192 @@ def solve_progressive(
                 f"    Progress: {prev_n_good} → {best_result['n_good']} "
                 f"good peaks"
             )
+
+            # ---- SANITY CHECK: re-verify the previous block ----
+            # After accepting block N (N>=2), fix block N and all blocks
+            # except N-1, then re-probe block N-1 using the original
+            # candidate list.  This catches cases where the first unknown
+            # block was a spurious match.
+            if len(selected_unknowns) >= 2:
+                target_pos = len(selected_unknowns) - 2  # index of block to re-check
+                target_mass, target_name = selected_unknowns[target_pos]
+
+                # Fixed blocks: all selected unknowns EXCEPT the target
+                fixed_masses_set = {
+                    selected_unknowns[i][0]
+                    for i in range(len(selected_unknowns))
+                    if i != target_pos
+                }
+
+                print(
+                    f"\n  --- Sanity check: re-verifying block "
+                    f"{target_pos + 1} ({target_name}, "
+                    f"{target_mass:.4f}) ---"
+                )
+
+                # Gather candidates: original list minus fixed blocks
+                # and minus known blocks
+                sanity_available = []
+                for si_idx, si_mass in enumerate(all_candidate_values):
+                    if any(abs(si_mass - fm) < 0.5 for fm in fixed_masses_set):
+                        continue
+                    if any(abs(si_mass - km) < 0.5 for km in known_masses):
+                        continue
+                    sanity_available.append((si_idx, si_mass))
+
+                if sanity_available:
+                    sanity_top_n = min(5, len(sanity_available))
+                    sanity_candidates = sanity_available[:sanity_top_n]
+
+                    print(
+                        f"  Testing {sanity_top_n} candidates "
+                        f"for position {target_pos + 1}:"
+                    )
+                    for si_idx, si_mass in sanity_candidates:
+                        nm = _name_for_mass(si_mass, "")
+                        tag = f" ({nm})" if nm else ""
+                        print(f"    {si_mass:.4f}{tag}")
+
+                    sanity_results = []
+                    for si_idx, si_mass in sanity_candidates:
+                        # Build unknown masses with candidate at target_pos
+                        trial_unknowns = []
+                        for ui, (um, _un) in enumerate(selected_unknowns):
+                            if ui == target_pos:
+                                trial_unknowns.append(si_mass)
+                            else:
+                                trial_unknowns.append(um)
+
+                        trial_unknown_arr = np.array(trial_unknowns)
+                        san_all_masses = np.concatenate(
+                            [known_differential, trial_unknown_arr]
+                        )
+                        san_is_known = np.array(
+                            [True] * k_known
+                            + [False] * len(trial_unknowns)
+                        )
+
+                        # Warm-start: copy best_model's x, zero the
+                        # target column to let the solver re-assign it
+                        san_warm_x = None
+                        if (
+                            best_model["x"] is not None
+                            and best_model["x"].shape[1]
+                            == len(san_all_masses)
+                        ):
+                            san_warm_x = best_model["x"].copy()
+                            san_warm_x[:, k_known + target_pos] = 0
+
+                        san_trial_iters = min(iterations, 15)
+                        san_start = time.time()
+                        san_timeout = 600
+
+                        san_result = run_phase(
+                            observations,
+                            current_common,
+                            san_all_masses,
+                            san_is_known,
+                            known_mass_limits,
+                            max_known,
+                            max_unknown,
+                            tolerance,
+                            final_tolerance,
+                            san_trial_iters,
+                            lower_bound,
+                            upper_bound,
+                            bad_allowed=bad,
+                            postgoal=min(postgoal, 5),
+                            common_block_fixed=common_block_fixed,
+                            timeout_seconds=san_timeout,
+                            start_time=san_start,
+                            verbose=verbose,
+                            initial_x=san_warm_x,
+                            should_cancel=should_cancel,
+                        )
+
+                        sanity_results.append(
+                            (si_idx, si_mass, san_result)
+                        )
+                        nm = _name_for_mass(si_mass, "?")
+                        print(
+                            f"    {si_mass:.4f} ({nm}): "
+                            f"BIC={san_result['bic']:.1f}, "
+                            f"good={san_result['n_good']}/{n}, "
+                            f"bad={san_result['n_bad']}, "
+                            f"mean_err="
+                            f"{san_result['mean_error']:.4f}"
+                        )
+
+                    # Pick the best sanity candidate
+                    sanity_results.sort(
+                        key=lambda t: (t[2]["bic"], -t[2]["n_good"])
+                    )
+                    (
+                        best_san_idx,
+                        best_san_mass,
+                        best_san_result,
+                    ) = sanity_results[0]
+
+                    # Accept replacement only if it actually improves
+                    # over the current model AND is a different block
+                    if (
+                        best_san_result["bic"] < best_model["bic"]
+                        and abs(best_san_mass - target_mass) > 0.5
+                    ):
+                        # Resolve name from refined mass
+                        ref_san_mass = best_san_mass
+                        if best_san_result["b"] is not None:
+                            r_idx = k_known + target_pos
+                            if r_idx < len(best_san_result["b"]):
+                                ref_san_mass = best_san_result["b"][
+                                    r_idx
+                                ]
+                        new_san_name = _name_for_mass(
+                            ref_san_mass,
+                            f"Unknown_{target_pos + 1}",
+                        )
+
+                        print(
+                            f"\n  Sanity check: REPLACING "
+                            f"{target_name} ({target_mass:.4f}) "
+                            f"with {new_san_name} "
+                            f"({ref_san_mass:.4f})"
+                        )
+                        print(
+                            f"    BIC: {best_model['bic']:.1f} → "
+                            f"{best_san_result['bic']:.1f}"
+                        )
+                        print(
+                            f"    Good peaks: "
+                            f"{best_model['n_good']} → "
+                            f"{best_san_result['n_good']}"
+                        )
+
+                        # Update tracking
+                        old_cand_idx = selected_unknown_cand_indices[
+                            target_pos
+                        ]
+                        used_candidate_indices.discard(old_cand_idx)
+                        used_candidate_indices.add(best_san_idx)
+                        selected_unknown_cand_indices[
+                            target_pos
+                        ] = best_san_idx
+                        selected_unknowns[target_pos] = (
+                            ref_san_mass,
+                            new_san_name,
+                        )
+                        best_model = best_san_result
+                        current_common = best_san_result["common"]
+                    else:
+                        print(
+                            f"\n  Sanity check: {target_name} "
+                            f"confirmed as best choice"
+                        )
+                else:
+                    print(
+                        "  No alternative candidates available "
+                        "for sanity check"
+                    )
         else:
             reasons = []
             if not candidate_used:
@@ -1985,7 +2577,7 @@ def solve_progressive(
         # ---- summary table (sorted by BIC) ----
         _valid_models = sorted(
             [(k, v) for k, v in _exhaustive_results.items() if v is not None],
-            key=lambda x: x[1]["bic"],
+            key=lambda x: x[1]["bic"] if x[1]["bic"] is not None else float("inf"),
         )
         n_models_tested = _peak_stats[0]["n_models_tested"] if _peak_stats else 0
 
@@ -1994,9 +2586,10 @@ def solve_progressive(
         print(f"  {'-'*40} {'-'*6} {'-'*5} {'-'*5} {'-'*9} {'-'*10}")
         for _lbl, _res in _valid_models:
             _ns = _lbl[:37] + "..." if len(_lbl) > 40 else _lbl
+            _bic_str = f"{_res['bic']:>10.1f}" if _res['bic'] is not None else f"{'\u2014':>10}"
             print(f"  {_ns:<40} {_res['n_blocks']:>6} {_res['n_good']:>5} "
                   f"{_res['n_bad']:>5} {_res['mean_error']:>9.4f} "
-                  f"{_res['bic']:>10.1f}")
+                  f"{_bic_str}")
 
         # ---- per-peak analysis ----
         print(f"\n  Per-peak exhaustive analysis "
@@ -2081,8 +2674,6 @@ def solve_progressive(
                 if int(round(consensus_x_full[i, r])) > 0:
                     _consensus_blocks_used.add(r)
         _consensus_n_blocks = len(_consensus_blocks_used)
-        _consensus_rss = float(np.sum(consensus_errors ** 2))
-        _consensus_bic = compute_bic(n, _consensus_rss, _consensus_n_blocks) if _n_consensus_good > 0 else float("inf")
 
         consensus_block_names = [final_names[r] for r in sorted(_consensus_blocks_used)]
         consensus_label = "Consensus"
@@ -2091,7 +2682,7 @@ def solve_progressive(
             "x": consensus_x_full,       # n × k_total (not subset-shaped)
             "x_full": consensus_x_full,
             "errors": consensus_errors,
-            "bic": _consensus_bic,
+            "bic": None,
             "n_good": _n_consensus_good,
             "n_bad": n - _n_consensus_good,
             "mean_error": float(np.mean(consensus_errors)),
@@ -2104,7 +2695,6 @@ def solve_progressive(
         print("\n  Consensus model (per-peak simplest explanation):")
         print(f"    Blocks used: {'+'.join(consensus_block_names)}")
         print(f"    Good: {_n_consensus_good}/{n}, "
-              f"BIC: {_consensus_bic:.1f}, "
               f"Mean error: {float(np.mean(consensus_errors)):.4f}")
 
         # ---- build BioConsensus model ----
@@ -2127,8 +2717,6 @@ def solve_progressive(
                 if int(round(bio_x_full[i, r])) > 0:
                     _bio_blocks_used.add(r)
         _bio_n_blocks = len(_bio_blocks_used)
-        _bio_rss = float(np.sum(bio_errors ** 2))
-        _bio_bic = compute_bic(n, _bio_rss, _bio_n_blocks) if _n_bio_good > 0 else float("inf")
 
         bio_block_names = [final_names[r] for r in sorted(_bio_blocks_used)]
 
@@ -2136,7 +2724,7 @@ def solve_progressive(
             "x": bio_x_full,
             "x_full": bio_x_full,
             "errors": bio_errors,
-            "bic": _bio_bic,
+            "bic": None,
             "n_good": _n_bio_good,
             "n_bad": n - _n_bio_good,
             "mean_error": float(np.mean(bio_errors)),
@@ -2149,7 +2737,6 @@ def solve_progressive(
         print("\n  BioConsensus model (biosynthetically parsimonious):")
         print(f"    Blocks used: {'+'.join(bio_block_names)}")
         print(f"    Good: {_n_bio_good}/{n}, "
-              f"BIC: {_bio_bic:.1f}, "
               f"Mean error: {float(np.mean(bio_errors)):.4f}")
 
         # Show per-peak differences between Consensus and BioConsensus
@@ -2196,11 +2783,6 @@ def solve_progressive(
                 if int(round(bio2_x_full[i, r])) > 0:
                     _bio2_blocks_used.add(r)
         _bio2_n_blocks = len(_bio2_blocks_used)
-        _bio2_rss = float(np.sum(bio2_errors ** 2))
-        _bio2_bic = (
-            compute_bic(n, _bio2_rss, _bio2_n_blocks)
-            if _n_bio2_good > 0 else float("inf")
-        )
 
         bio2_block_names = [final_names[r] for r in sorted(_bio2_blocks_used)]
 
@@ -2208,7 +2790,7 @@ def solve_progressive(
             "x": bio2_x_full,
             "x_full": bio2_x_full,
             "errors": bio2_errors,
-            "bic": _bio2_bic,
+            "bic": None,
             "n_good": _n_bio2_good,
             "n_bad": n - _n_bio2_good,
             "mean_error": float(np.mean(bio2_errors)),
@@ -2220,7 +2802,6 @@ def solve_progressive(
 
         print(f"    Blocks used: {'+'.join(bio2_block_names)}")
         print(f"    Good: {_n_bio2_good}/{n}, "
-              f"BIC: {_bio2_bic:.1f}, "
               f"Mean error: {float(np.mean(bio2_errors)):.4f}")
 
         # Show per-peak differences vs BioConsensus
@@ -2264,20 +2845,90 @@ def solve_progressive(
                 if len(alts) > 8:
                     print(f"      ... and {len(alts) - 8} more")
 
-        # ---- update peak_stats to reflect BioConsensus2 choices ----
+        # ---- build BioConsensus3 model ----
+        # Extends BioConsensus2 with block-dependency awareness.
+        # Uses the inferred dependency DAG as soft constraints in the
+        # SA scoring, penalising compositions that violate known
+        # biosynthetic prerequisites.
+        print("\n  BioConsensus3 (dependency-aware SA consensus):")
+        bio3_x_full, bio3_errors, bio3_alternatives = _build_bio_consensus3(
+            observations,
+            common_block,
+            b,
+            final_names,
+            k_total,
+            k_known,
+            known_mass_limits,
+            max_known,
+            max_unknown,
+            tolerance,
+            final_tolerance,
+            dep_info=_dep_info,
+        )
+        _n_bio3_good = int(np.sum(bio3_errors < final_tolerance))
+
+        _bio3_blocks_used = set()
         for i in range(n):
-            bio2_comp = [int(round(bio2_x_full[i, r])) for r in range(k_total)]
-            if bio2_errors[i] < final_tolerance:
+            for r in range(k_total):
+                if int(round(bio3_x_full[i, r])) > 0:
+                    _bio3_blocks_used.add(r)
+        _bio3_n_blocks = len(_bio3_blocks_used)
+
+        bio3_block_names = [final_names[r] for r in sorted(_bio3_blocks_used)]
+
+        _exhaustive_results["BioConsensus3"] = {
+            "x": bio3_x_full,
+            "x_full": bio3_x_full,
+            "errors": bio3_errors,
+            "bic": None,
+            "n_good": _n_bio3_good,
+            "n_bad": n - _n_bio3_good,
+            "mean_error": float(np.mean(bio3_errors)),
+            "blocks_used": bio3_block_names,
+            "block_indices": sorted(_bio3_blocks_used),
+            "n_blocks": _bio3_n_blocks,
+            "is_consensus": True,
+        }
+
+        print(f"    Blocks used: {'+'.join(bio3_block_names)}")
+        print(f"    Good: {_n_bio3_good}/{n}, "
+              f"Mean error: {float(np.mean(bio3_errors)):.4f}")
+
+        # Show per-peak differences vs BioConsensus2
+        _n_diff3 = 0
+        for i in range(n):
+            c_bio2 = [int(round(bio2_x_full[i, r])) for r in range(k_total)]
+            c_bio3 = [int(round(bio3_x_full[i, r])) for r in range(k_total)]
+            if c_bio2 != c_bio3:
+                _n_diff3 += 1
+                old_parts = [f"{c}{final_names[r]}" for r, c in enumerate(c_bio2) if c > 0]
+                new_parts = [f"{c}{final_names[r]}" for r, c in enumerate(c_bio3) if c > 0]
+                old_f = "Common + " + " + ".join(old_parts) if old_parts else "Common"
+                new_f = "Common + " + " + ".join(new_parts) if new_parts else "Common"
+                n_alts = len(bio3_alternatives[i])
+                print(f"    Peak {i+1} ({observations[i]:.3f}): "
+                      f"BioConsensus2={old_f}  =>  BioConsensus3={new_f}"
+                      f"  ({n_alts} alternatives)")
+        if _n_diff3 == 0:
+            print("    (identical to BioConsensus2)")
+        else:
+            print(f"    {_n_diff3} peak(s) differ between "
+                  f"BioConsensus2 and BioConsensus3")
+
+        # ---- update peak_stats to reflect BioConsensus3 choices ----
+        for i in range(n):
+            bio3_comp = [int(round(bio3_x_full[i, r])) for r in range(k_total)]
+            if bio3_errors[i] < final_tolerance:
                 parts = []
                 for r in range(k_total):
-                    if bio2_comp[r] > 0:
-                        parts.append(f"{bio2_comp[r]}{final_names[r]}")
-                bio2_formula = " + ".join(parts) if parts else "(empty)"
-                _peak_stats[i]["best_model"] = "BioConsensus2"
-                _peak_stats[i]["best_formula"] = bio2_formula
-                _peak_stats[i]["best_composition"] = bio2_comp
-                _peak_stats[i]["n_alternatives"] = len(bio2_alternatives[i])
-                _peak_stats[i]["alternatives"] = bio2_alternatives[i]
+                    if bio3_comp[r] > 0:
+                        parts.append(f"{bio3_comp[r]}{final_names[r]}")
+                bio3_formula = " + ".join(parts) if parts else "(empty)"
+                _peak_stats[i]["best_model"] = "BioConsensus3"
+                _peak_stats[i]["best_formula"] = bio3_formula
+                _peak_stats[i]["best_composition"] = bio3_comp
+                _peak_stats[i]["n_alternatives"] = len(bio3_alternatives[i])
+                _peak_stats[i]["alternatives"] = bio3_alternatives[i]
 
         # ---- update best_model to BIC-best exhaustive model ----
         if _valid_models:
@@ -2563,7 +3214,6 @@ def solve_progressive(
             print(f"\n{'='*60}")
             print("BioConsensus2 Decompositions:")
             print(f"  Good: {bio2_res['n_good']}/{n}, "
-                  f"BIC: {bio2_res['bic']:.1f}, "
                   f"Mean error: {bio2_res['mean_error']:.4f}")
             print(f"{'='*60}")
             for i in range(n):
@@ -2585,6 +3235,37 @@ def solve_progressive(
                     f"Peak {i+1} ({observations[i]:.3f}) => {recipe2}{struct_str2}, "
                     f"error={err2:.3f}, recon={recon2:.3f}, "
                     f"recon_theor={recon2_theor:.3f}{flag2}"
+                )
+
+    # ---- BioConsensus3 decompositions ----
+    if _exhaustive_results is not None and "BioConsensus3" in _exhaustive_results:
+        bio3_res = _exhaustive_results["BioConsensus3"]
+        if bio3_res is not None:
+            bio3_x = bio3_res["x_full"]
+            print(f"\n{'='*60}")
+            print("BioConsensus3 Decompositions (dependency-aware):")
+            print(f"  Good: {bio3_res['n_good']}/{n}, "
+                  f"Mean error: {bio3_res['mean_error']:.4f}")
+            print(f"{'='*60}")
+            for i in range(n):
+                parts3 = []
+                for r in range(k_total):
+                    count3 = int(round(bio3_x[i, r]))
+                    if count3 > 0:
+                        parts3.append(f"{count3}{final_names[r]}")
+                recipe3 = f"{common_name} ({common_block:.3f})"
+                if parts3:
+                    recipe3 += " + " + " + ".join(parts3)
+                struct3 = merge_structure_formula(common_composition, final_names, bio3_x[i, :])
+                struct_str3 = f"  [{struct3}]" if struct3 else ""
+                recon3 = common_block + np.sum(bio3_x[i, :] * b)
+                recon3_theor = common_block_theoretical + np.sum(bio3_x[i, :] * b_original)
+                err3 = abs(observations[i] - recon3)
+                flag3 = " [BAD]" if err3 >= final_tolerance else ""
+                print(
+                    f"Peak {i+1} ({observations[i]:.3f}) => {recipe3}{struct_str3}, "
+                    f"error={err3:.3f}, recon={recon3:.3f}, "
+                    f"recon_theor={recon3_theor:.3f}{flag3}"
                 )
 
     # ---- TSV output ----

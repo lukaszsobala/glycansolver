@@ -453,7 +453,7 @@ def analyse_biosynthetic_paths(
             # use the correct per-peak block counts and are not tied to a
             # single block subset.
             model_label = row.get("Model", "")
-            if model_label not in ("Consensus", "BioConsensus", "BioConsensus2"):
+            if model_label not in ("Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3"):
                 model_block_set = set(model_label.split("+")) if model_label else set()
                 if model_block_set:
                     composition = [
@@ -574,7 +574,7 @@ def _write_summary(analyses: list[ModelAnalysis], path: str) -> None:
         ])
         for rank, ma in enumerate(analyses, 1):
             ns = ma.network
-            is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2")
+            is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3")
             bic_str = "" if is_consensus else (f"{ma.model_bic:.2f}" if ma.model_bic is not None else "")
             writer.writerow([
                 rank, ma.model,
@@ -910,7 +910,7 @@ def _serialise(
 
         # BIC is not meaningful for consensus models — they cherry-pick
         # per-peak compositions from across all subset models.
-        is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2")
+        is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3")
         bic_value = None if is_consensus else ma.model_bic
 
         models_out.append({
@@ -976,7 +976,7 @@ def _write_detailed_report(
 
     for rank, ma in enumerate(analyses, 1):
         ns = ma.network
-        is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2")
+        is_consensus = ma.model in ("Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3")
         lines.append("-" * W)
         lines.append(f"Rank {rank}: {ma.model}")
         if not is_consensus and ma.model_bic is not None:

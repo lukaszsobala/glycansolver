@@ -67,7 +67,7 @@ def infer_block_dependencies(
         ``dependency_edges``  : ``list[(parent, child)]``
         ``usage_info``        : per-block usage statistics
     """
-    consensus_labels = {"Consensus", "BioConsensus", "BioConsensus2"}
+    consensus_labels = {"Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3"}
 
     # Filter to valid, non-consensus models
     valid_models = {
@@ -231,7 +231,7 @@ def reorder_model_label(
     >>> reorder_model_label("Hex+dHex+HexNAc", ["Hex", "HexNAc", "dHex"])
     'Hex+HexNAc+dHex'
     """
-    if label in ("Consensus", "BioConsensus", "BioConsensus2"):
+    if label in ("Consensus", "BioConsensus", "BioConsensus2", "BioConsensus3"):
         return label
 
     blocks = label.split("+")

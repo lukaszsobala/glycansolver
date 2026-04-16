@@ -191,7 +191,7 @@ def _load_free_red_end_masses() -> dict[str, float]:
     return result
 
 
-def _parse_candidates_tsv(path: str) -> list[dict]:
+def _parse_candidates_tsv(path: str, glycan_type: str | None = None) -> list[dict]:
     """Parse the candidates.tsv produced by the solver."""
     candidates = []
     if not os.path.exists(path):
@@ -207,8 +207,8 @@ def _parse_candidates_tsv(path: str) -> list[dict]:
                 "size": int(row["Size"]),
                 "name": "",  # will be resolved below
             })
-    # Try to name candidates from the blocks dict
-    bd = _load_blocks_dict()
+    # Try to name candidates from the blocks dict (filtered by glycan type)
+    bd = _load_blocks_dict(glycan_type)
     for c in candidates:
         for b in bd:
             if abs(c["median"] - b["mass"]) < 0.5:
@@ -405,11 +405,18 @@ def _build_solver_kwargs(form: dict, peaks_path: str, output_dir: str,
     else:
         # Parse composition from form fields (common_Hex, common_HexNAc, …)
         composition: dict[str, int] = {}
+        has_composition_field = False
         for bname in block_masses:
-            cnt = int(form.get(f"common_{bname}", 0))
+            field_key = f"common_{bname}"
+            if field_key in form:
+                has_composition_field = True
+            cnt = int(form.get(field_key, 0))
             if cnt > 0:
                 composition[bname] = cnt
-        if not composition:
+        # Only fall back to default if NO composition fields were present
+        # in the form at all (first visit).  If the user explicitly set all
+        # counts to 0 (e.g. "2-AA only"), honour that empty composition.
+        if not composition and not has_composition_field:
             composition = dict(DEFAULT_COMMON_COMPOSITION)
 
         # Label
@@ -613,7 +620,8 @@ def find_candidates():
 
     # Parse candidates
     cand_path = os.path.join(output_dir, "candidates.tsv")
-    candidates = _parse_candidates_tsv(cand_path)
+    glycan_type = form.get("glycan_type", "native")
+    candidates = _parse_candidates_tsv(cand_path, glycan_type)
 
     return jsonify({
         "candidates": candidates[:20],
