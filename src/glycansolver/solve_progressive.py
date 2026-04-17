@@ -27,6 +27,7 @@ import numpy as np
 
 from .block_init import get_smart_block_init, load_blocks_dictionary, load_blocks_dictionary_with_categories
 from .utils import (
+    MONOISOTOPIC_MASS_UNIT,
     common_composition_name,
     ensure_output_directory,
     find_nearest_multiple,
@@ -159,7 +160,7 @@ def run_phase(
     lambda_multiple = 1e4
     lambda_err = 1e3
     max_lambda_err = 1e6
-    multiple_base = 1.00035
+    multiple_base = MONOISOTOPIC_MASS_UNIT
     tol_conv = 1e-3
 
     # ---- state ----

@@ -1,7 +1,7 @@
 # name	mass	category	max_limit	glycan_type	full_name
-# category: common = universal monosaccharides (try first)
+# category: common = commonly found monosaccharides (try first)
 #           mod    = modifications (try second)
-#           rare   = unusual sugar residues (try last)
+#           rare   = unusual sugar residues (the algorithm tries these last)
 # max_limit: optional default cap on copies per peak (omit to use built-in default)
 # glycan_type: native (default), permethylated, peracetylated
 # full_name: optional human-readable name (shown on hover in the web UI)
@@ -15,6 +15,7 @@ NeuAc	291.095419	common	4	native	N-Acetylneuraminic acid
 NeuGc	307.090334	rare	4	native	N-Glycolylneuraminic acid
 KDN	250.068870	rare	4	native	Deaminoneuraminic acid
 HexA	176.03209	rare	4	native	Hexuronic acid
+HexN	161.068809	rare	4	native	Hexosamine
 dHexNAc	187.084459	rare	4	native	N-Acetyldeoxyhexosamine
 Pent	132.04226	rare	4	native	Pentose (e.g. xylose)
 dPent	116.047345	rare	4	native	Deoxypentose (e.g. deoxyribose)

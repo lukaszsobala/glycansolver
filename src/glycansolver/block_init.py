@@ -40,8 +40,11 @@ def get_smart_block_init(
     """
     # Load blocks dictionary if provided
     blocks_dict = {}
+    blocks_cat = {}  # mass → category ('common', 'rare', 'mod')
     if blocks_dict_path and os.path.exists(blocks_dict_path):
-        blocks_dict = load_blocks_dictionary(blocks_dict_path, glycan_type=glycan_type)
+        blocks_dict, blocks_cat = load_blocks_dictionary_with_categories(
+            blocks_dict_path, glycan_type=glycan_type
+        )
         if blocks_dict:
             print(f"Loaded {len(blocks_dict)} entries from blocks dictionary")
 
@@ -88,11 +91,13 @@ def get_smart_block_init(
     for diff in diffs:
         too_close = False
         filter_reason = ""
+        filtered_by_known_block = False  # track source of filtering
 
         # Check against user-specified known blocks only (not full dictionary)
         for known in known_differential:
             if abs(diff - known) < min_gap:
                 too_close = True
+                filtered_by_known_block = True
                 filter_reason = f"Too close to known block {known:.3f}"
                 break
 
@@ -100,6 +105,7 @@ def get_smart_block_init(
             for multiplier in range(2, 10):  # Check 2x - 10x
                 if abs(diff - (known * multiplier)) < min_gap:
                     too_close = True
+                    filtered_by_known_block = True
                     filter_reason = f"Multiple of {known:.3f} ({multiplier}x)"
                     if verbose:
                         print(
@@ -169,6 +175,23 @@ def get_smart_block_init(
                 if too_close:
                     break
 
+        # Rescue: individual dictionary blocks must remain discoverable
+        # even when they happen to equal a combination or difference of
+        # other dictionary entries (e.g. HexNAc ≈ HexN + Ac).
+        # Only rescue diffs that were NOT filtered by the user-specified
+        # known-block check (those are genuinely redundant).
+        if too_close and not filtered_by_known_block and blocks_dict:
+            for dict_mass in blocks_dict:
+                if abs(diff - dict_mass) < min_gap:
+                    if verbose:
+                        print(
+                            f"Rescued {diff:.3f} — matches dictionary entry "
+                            f"'{blocks_dict[dict_mass]}' ({dict_mass:.5f})"
+                        )
+                    too_close = False
+                    filter_reason = ""
+                    break
+
         # Check against lower/upper bounds for unknown blocks
         if not too_close and lower_bound is not None and diff < lower_bound:
             too_close = True
@@ -182,7 +205,9 @@ def get_smart_block_init(
         else:
             filtered_diffs.append(diff)
 
-    # If we don't have enough differences, fall back to random initialization
+    # If we don't have enough differences, fall back to random initialization.
+    # In practice this branch is rarely reached — the combination filter
+    # with the rescue clause preserves enough candidates for typical data.
     if len(filtered_diffs) == 0 or len(filtered_diffs) < k_unknown:
         if verbose:
             print("Not enough distinct differences found. Using random initialization.")
@@ -243,24 +268,30 @@ def get_smart_block_init(
             else:
                 tightness = 1 / (variance + 0.001)  # Add small constant to avoid division by zero
 
-        # Calculate median and add penalty for deviation from 1.00035 multiple
+        # Calculate median and add penalty for deviation from monoisotopic
+        # mass-unit multiple.  This penalty only applies to saccharide-like
+        # candidates (common/rare blocks).  Modifications (category 'mod')
+        # have small masses that do not follow monoisotopic-multiple spacing,
+        # so penalising them would be misleading.
         median = np.median(cluster)
 
-        # Find nearest multiple of 1.00035
-        nearest_mult = find_nearest_multiple(median, base=1.00035)
+        # Determine if this cluster matches a 'mod' dictionary entry
+        _is_mod = False
+        if blocks_cat:
+            for bm, bcat in blocks_cat.items():
+                if abs(median - bm) < min_gap and bcat == "mod":
+                    _is_mod = True
+                    break
 
-        # Calculate deviation from nearest multiple
-        deviation = abs(median - nearest_mult)
+        if _is_mod:
+            multiple_factor = 1.0  # no penalty for modifications
+        else:
+            nearest_mult = find_nearest_multiple(median)
+            deviation = abs(median - nearest_mult)
+            # Exponential decay: exp(-k*x); 0 deviation → 1.0, large → small
+            multiple_factor = np.exp(-4 * deviation)
 
-        # Create a multiplier penalty that decreases as deviation increases
-        # Use exponential decay: exp(-k*x) where k controls how quickly the penalty drops
-        # 0 deviation = 1.0 multiplier, large deviation = small multiplier
-        multiple_factor = np.exp(
-            -4 * deviation
-        )  # Adjust constant to control sensitivity
-
-        # Apply the penalty to the score calculation
-        # Score is now a combination of cluster size, tightness, and proximity to 1.00035 multiple
+        # Score = cluster size × tightness × monoisotopic-multiple proximity
         score = size * tightness * multiple_factor
 
         # Check if this median is in the blocks dictionary (or very close to a value)

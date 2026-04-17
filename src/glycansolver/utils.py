@@ -191,14 +191,19 @@ def ensure_output_directory(output_dir):
         raise RuntimeError(f"{output_dir} exists but is not a directory")
 
 
+# Empirical mass-unit spacing that favours carbohydrate-like candidates
+# over compounds with different elemental compositions.
+MONOISOTOPIC_MASS_UNIT = 1.00035
+
+
 # Add these helper functions before the optimization loop
-def distance_to_nearest_multiple(value, base=1.0004):
+def distance_to_nearest_multiple(value, base=MONOISOTOPIC_MASS_UNIT):
     """Calculate the distance to the nearest multiple of base."""
     nearest_multiple = round(value / base) * base
     return abs(value - nearest_multiple)
 
 
-def find_nearest_multiple(value, base=1.0004):
+def find_nearest_multiple(value, base=MONOISOTOPIC_MASS_UNIT):
     """Find the nearest multiple of base."""
     return round(value / base) * base
 

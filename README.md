@@ -39,7 +39,7 @@ The solver accepts:
 - Plain-text peak files with one mass per line
 - `.msd` files
 
-Sample inputs are available under `data/`.
+Sample inputs are available under `src/glycansolver/data/`.
 
 ## Command-Line Usage
 
@@ -83,11 +83,12 @@ glycansolver \
 - `-c, --common`: common block mass; if omitted, a default is computed from mode and matrix
 - `-D, --mode`: ionization mode (`neg_h`, `pos_na`, `pos_h`)
 - `-X, --matrix`: matrix / reduction mode (`2aa_nr`, `2aa_r`)
-- `-d, --blocks-dict`: path to the block dictionary, default `data/blocks.txt`
+- `-d, --blocks-dict`: path to the block dictionary, default `src/glycansolver/data/blocks.txt`
 - `-e, --exclude`: block names or masses to exclude from candidate discovery
 - `--exhaustive`: exhaustive comparison level (`0`, `1`, or `2`)
 - `-T, --timeout`: maximum runtime in minutes
 - `-v, --verbose`: verbose console output
+- `-C, --candidates_only`: stop after generating the candidates list
 
 ### CLI Output Files
 
@@ -190,8 +191,8 @@ Avoid putting these values in the `Dockerfile`. Inject them at runtime (or via D
 - `src/glycansolver/web.py`: Flask application and web routes
 - `src/glycansolver/solve_progressive.py`: main progressive solver
 - `src/glycansolver/utils.py`: I/O and reporting helpers
-- `data/blocks.txt`: block dictionary used by the solver and web UI
-- `data/labels.txt`: derivatization label definitions
+- `src/glycansolver/data/blocks.txt`: block dictionary used by the solver and web UI
+- `src/glycansolver/data/labels.txt`: derivatization label definitions
 
 ## Notes
 
