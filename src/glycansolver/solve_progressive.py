@@ -150,6 +150,26 @@ def run_phase(
     k_known = int(np.sum(block_is_known))
     k_unknown = k_total - k_known
 
+    # ---- trivial case: no blocks at all (pure baseline) ----
+    if k_total == 0:
+        errors = np.abs(observations - common_block)
+        rss = float(np.sum(errors ** 2))
+        n_good = int(np.sum(errors < tol_final))
+        bic = compute_bic(n, rss, 0) if rss > 0 else float("inf")
+        return {
+            "x": np.zeros((n, 0)),
+            "b": np.array([]),
+            "common": common_block,
+            "bic": bic,
+            "rss": rss,
+            "n_good": n_good,
+            "n_bad": n - n_good,
+            "mean_error": float(np.mean(errors)),
+            "errors": errors,
+            "converged": False,
+            "used_unknowns": 0,
+        }
+
     b = block_masses.copy().astype(float)
     known_differential = b[:k_known].copy()
     y = observations - common_block
@@ -263,8 +283,12 @@ def run_phase(
             ]
 
         error_b = cp.matmul(x_val, b_var) - y
-        penalty_known = lambda_known * cp.sum_squares(
-            b_var[:k_known] - known_differential
+        penalty_known = (
+            lambda_known * cp.sum_squares(
+                b_var[:k_known] - known_differential
+            )
+            if k_known > 0
+            else 0
         )
 
         multiple_penalty = 0
@@ -1710,8 +1734,10 @@ def solve_progressive(
         known_block_names = None
 
     if not known_masses:
-        known_masses = [162.052824]
-        known_mass_limits = [max_known]
+        # No known blocks — all blocks will be discovered progressively.
+        # (Previously this defaulted to Hex, but that prevented Hex from
+        # being treated as a discoverable candidate.)
+        pass
 
     k_known = len(known_masses)
     known_differential = np.array(known_masses)
@@ -1961,10 +1987,16 @@ def solve_progressive(
         if should_cancel and should_cancel():
             raise SolverCancelledError("Analysis stopped by user request.")
 
+        # Pair fallback may have added 2 blocks in one step — check budget
+        if len(selected_unknowns) >= max_unknown_blocks:
+            print(f"\nReached unknown-block budget ({max_unknown_blocks}).")
+            break
+
+        block_num = len(selected_unknowns) + 1
         print(f"\n{'='*60}")
         print(
-            f"PHASE 2.{step+1}: Evaluating candidate unknown block "
-            f"{step+1}/{max_unknown_blocks}"
+            f"PHASE 2.{block_num}: Evaluating candidate unknown block "
+            f"{block_num}/{max_unknown_blocks}"
         )
         print(f"{'='*60}")
 
@@ -2310,7 +2342,141 @@ def solve_progressive(
                 reasons.append(f"no new peaks explained (peaks Δ={peaks_improvement:+d})")
             elif bic_improvement <= MIN_BIC_DELTA and peaks_improvement < 2:
                 reasons.append(f"insufficient improvement (BIC Δ={bic_improvement:+.1f}, peaks Δ={peaks_improvement:+d})")
-            print(f"  ✗ REJECTED — {'; '.join(reasons)}. Stopping progressive search.")
+            print(f"  ✗ REJECTED — {'; '.join(reasons)}.")
+
+            # ----------------------------------------------------------
+            # PAIR DISCOVERY FALLBACK
+            # When a single block fails to improve the model on the first
+            # round and there is budget for ≥2 unknowns, try adding two
+            # candidates simultaneously.  This handles the common case
+            # where two building blocks must co-occur to explain any
+            # peaks (e.g. Hex + HexNAc in a typical N-glycan).
+            # ----------------------------------------------------------
+            if step == 0 and max_unknown_blocks >= 2 and len(available) >= 2:
+                pair_top_n = min(5, len(available))
+                pair_candidates = available[:pair_top_n]
+
+                from itertools import combinations
+                pairs = list(combinations(range(pair_top_n), 2))
+                print(f"\n  Trying {len(pairs)} candidate pairs as fallback …")
+
+                pair_results = []
+                for pi, pj in pairs:
+                    if should_cancel and should_cancel():
+                        raise SolverCancelledError("Analysis stopped by user request.")
+
+                    idx_a, mass_a = pair_candidates[pi]
+                    idx_b, mass_b = pair_candidates[pj]
+                    nm_a = _name_for_mass(mass_a, "?")
+                    nm_b = _name_for_mass(mass_b, "?")
+
+                    trial_unknown = np.array([mass_a, mass_b])
+                    all_masses = np.concatenate([known_differential, trial_unknown])
+                    is_known = np.array(
+                        [True] * k_known + [False] * len(trial_unknown)
+                    )
+
+                    # Warm-start: extend current best with 2 zero columns
+                    pair_warm_x = None
+                    if prev_x is not None:
+                        pair_warm_x = np.hstack([prev_x, np.zeros((n, 2))])
+
+                    pair_start = time.time()
+                    pair_result = run_phase(
+                        observations,
+                        current_common,
+                        all_masses,
+                        is_known,
+                        known_mass_limits,
+                        max_known,
+                        max_unknown,
+                        tolerance,
+                        final_tolerance,
+                        min(iterations, 30),
+                        lower_bound,
+                        upper_bound,
+                        bad_allowed=bad,
+                        postgoal=min(postgoal, 5),
+                        common_block_fixed=common_block_fixed,
+                        timeout_seconds=600,
+                        start_time=pair_start,
+                        verbose=verbose,
+                        initial_x=pair_warm_x,
+                        should_cancel=should_cancel,
+                    )
+
+                    pair_results.append((idx_a, idx_b, mass_a, mass_b, pair_result))
+                    print(
+                        f"  {mass_a:.4f} ({nm_a}) + {mass_b:.4f} ({nm_b}): "
+                        f"BIC={pair_result['bic']:.1f}, "
+                        f"good={pair_result['n_good']}/{n}, "
+                        f"bad={pair_result['n_bad']}, "
+                        f"mean_err={pair_result['mean_error']:.4f}"
+                    )
+
+                if pair_results:
+                    pair_results.sort(key=lambda t: (t[4]["bic"], -t[4]["n_good"]))
+                    p_idx_a, p_idx_b, p_mass_a, p_mass_b, p_result = pair_results[0]
+
+                    p_bic_imp = best_model["bic"] - p_result["bic"]
+                    p_peaks_imp = p_result["n_good"] - best_model["n_good"]
+
+                    # Check that BOTH blocks are actually used
+                    col_a = k_known + len(selected_unknowns)
+                    col_b = col_a + 1
+                    used_a = (
+                        p_result["x"] is not None
+                        and col_a < p_result["x"].shape[1]
+                        and np.any(np.round(p_result["x"][:, col_a]) > 0)
+                    )
+                    used_b = (
+                        p_result["x"] is not None
+                        and col_b < p_result["x"].shape[1]
+                        and np.any(np.round(p_result["x"][:, col_b]) > 0)
+                    )
+
+                    # Resolve refined masses
+                    ref_a = p_mass_a
+                    ref_b = p_mass_b
+                    if p_result["b"] is not None:
+                        if col_a < len(p_result["b"]):
+                            ref_a = p_result["b"][col_a]
+                        if col_b < len(p_result["b"]):
+                            ref_b = p_result["b"][col_b]
+
+                    name_a = _name_for_mass(ref_a, "Unknown_1")
+                    name_b = _name_for_mass(ref_b, "Unknown_2")
+
+                    print(f"\n  Best pair: {ref_a:.4f} ({name_a}) + {ref_b:.4f} ({name_b})")
+                    print(f"    BIC change : {p_bic_imp:+.1f}")
+                    print(f"    Peaks gained: {p_peaks_imp:+d}")
+                    print(f"    Block A used: {'yes' if used_a else 'no'}")
+                    print(f"    Block B used: {'yes' if used_b else 'no'}")
+
+                    both_used = used_a and used_b
+                    # The pair fallback fires only when NO single block
+                    # helped, so we use a more lenient acceptance: accept
+                    # if both blocks are used and BIC improved substantially
+                    # (the later refinement phase with more iterations will
+                    # have a chance to produce GOOD peaks).
+                    if both_used and p_bic_imp > MIN_BIC_DELTA:
+                        used_candidate_indices.add(p_idx_a)
+                        used_candidate_indices.add(p_idx_b)
+                        selected_unknowns.append((ref_a, name_a))
+                        selected_unknowns.append((ref_b, name_b))
+                        selected_unknown_cand_indices.append(p_idx_a)
+                        selected_unknown_cand_indices.append(p_idx_b)
+                        best_model = p_result
+                        current_common = p_result["common"]
+                        print(f"  ✓ PAIR ACCEPTED — model now has {k_known + len(selected_unknowns)} blocks")
+                        print(
+                            f"    Progress: {prev_n_good} → {p_result['n_good']} "
+                            f"good peaks"
+                        )
+                        continue  # proceed to next step in the progressive loop
+                    else:
+                        print("  ✗ Pair rejected. Stopping progressive search.")
+
             break
 
     # ================================================================

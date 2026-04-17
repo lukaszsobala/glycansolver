@@ -479,7 +479,7 @@ def _build_solver_kwargs(form: dict, peaks_path: str, output_dir: str,
                 custom_names.append(cname)
             # state == "discover" → candidate, not known
 
-    names_str = ",".join(block_entries) if block_entries else "Hex"
+    names_str = ",".join(block_entries) if block_entries else None
 
     # Build masses string: only needed when custom blocks are present.
     # Dictionary blocks are resolved by name; custom blocks need explicit mass.

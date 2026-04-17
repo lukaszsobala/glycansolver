@@ -179,7 +179,8 @@ def parse_arguments():
         "-n",
         "--names",
         default="Hex",
-        help="Comma-separated list of names for known blocks (default: Hex)",
+        help="Comma-separated list of names for known blocks (default: Hex). "
+             "Use an empty string to discover all blocks.",
     )
 
     # ALGORITHM-RELATED OPTIONS
