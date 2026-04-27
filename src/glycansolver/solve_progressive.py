@@ -126,6 +126,7 @@ def run_phase(
     verbose=False,
     initial_x=None,
     should_cancel=None,
+    known_masses_anchor=None,
 ):
     """
     Alternating optimization for a *fixed* set of blocks.
@@ -172,6 +173,13 @@ def run_phase(
 
     b = block_masses.copy().astype(float)
     known_differential = b[:k_known].copy()
+    # Anchor for calibration box: use the caller-supplied theoretical masses
+    # (if any) so the window cannot walk across successive phase calls.
+    _calib_anchor = (
+        known_masses_anchor[:k_known]
+        if known_masses_anchor is not None
+        else known_differential
+    )
     y = observations - common_block
 
     # ---- hyper-parameters ----
@@ -244,6 +252,9 @@ def run_phase(
             + lambda_block * cp.sum(z[k_known:])   # penalise unknown activation
         )
 
+        # Cache previous x_val for robust fallback
+        prev_x_val = x_val.copy() if x_val is not None else None
+
         prob = cp.Problem(cp.Minimize(obj), constraints)  # type: ignore[arg-type]
         try:
             # Warm-start from previous x_val if available
@@ -256,19 +267,23 @@ def run_phase(
                 prob.solve(solver=cp.GUROBI, TimeLimit=120, warm_start=True)
             else:
                 prob.solve(solver=cp.GUROBI, TimeLimit=120)
+                
             if prob.status in ("optimal", "optimal_inaccurate") and x.value is not None:
                 x_val = x.value
-            elif x_val is None:
+            elif x.value is not None:
+                # If the solver timed out or hit another limit but found a feasible solution, use it!
+                x_val = x.value
+            elif prev_x_val is not None:
+                x_val = prev_x_val
+            else:
                 x_val = np.zeros((n, k_total))
-                for r in range(k_known):
-                    x_val[:, r] = 1
         except Exception as e:
             if verbose:
                 print(f"    x-update error: {e}")
-            if x_val is None:
+            if prev_x_val is not None:
+                x_val = prev_x_val
+            else:
                 x_val = np.zeros((n, k_total))
-                for r in range(k_known):
-                    x_val[:, r] = 1
 
         if should_cancel and should_cancel():
             raise SolverCancelledError("Analysis stopped by user request.")
@@ -276,6 +291,31 @@ def run_phase(
         # ------ b-update ------
         b_var = cp.Variable(k_total, nonneg=True)
         constraints_b = [b_var >= 0]
+        if k_known > 0:
+            # Allow limited instrument-calibration drift for known masses, but
+            # prevent runaway drift that breaks polymer spacing at high counts.
+            #
+            # Rationale: if a known block appears at most max_known_limit times
+            # in a single peak, the accumulated mass error from a per-block
+            # shift δ is at most max_known_limit × δ.  Bounding δ ≤
+            # tol_final / max_known_limit ensures that even the most polymer-rich
+            # peak stays within the final tolerance — no arbitrary constants needed.
+            # Issue 3 Fix: Empirical bounds to ensure the window isn't squashed completely
+            # if max_known_limit is set extremely high. We calculate empirical combinations.
+            max_possible_count = 1
+            if len(y) > 0 and k_known > 0:
+                max_peak = np.max(y)
+                min_block = np.min(b[:k_known])
+                if min_block > 0:
+                    max_possible_count = int(np.ceil(max_peak / min_block))
+            
+            effective_limit = max(min(max_possible_count, max_known_limit), 1)
+            known_mass_window = max(tol_final / effective_limit, 0.01)
+
+            constraints_b += [
+                b_var[:k_known] >= _calib_anchor - known_mass_window,
+                b_var[:k_known] <= _calib_anchor + known_mass_window,
+            ]
         if k_unknown > 0:
             constraints_b += [
                 b_var[k_known:] >= lb_unknown,
@@ -283,9 +323,20 @@ def run_phase(
             ]
 
         error_b = cp.matmul(x_val, b_var) - y
+
+        # Principled robust weighting (Iteratively Reweighted Least Squares):
+        # Emulates Huber loss with the transition threshold strictly at `tol_final`.
+        # For |err| <= tol_final: weight = 1.0 (L2 loss allows fine calibration).
+        # For |err| >  tol_final: weight = tol_final / |err| (gradient plateaus to L1).
+        # This prevents 30+ Da outliers from overwhelming the objective entirely without
+        # relying on arbitrary scaling constants.
+        curr_err_b = np.sum(x_val * b, axis=1) - y
+        weights = np.minimum(1.0, tol_final / (np.abs(curr_err_b) + 1e-9))
+        weighted_error_b = cp.multiply(np.sqrt(weights), error_b)
+
         penalty_known = (
             lambda_known * cp.sum_squares(
-                b_var[:k_known] - known_differential
+                b_var[:k_known] - _calib_anchor
             )
             if k_known > 0
             else 0
@@ -298,7 +349,7 @@ def run_phase(
                 multiple_penalty += cp.sum_squares(b_var[i] - nearest_mult)
 
         obj_b = (
-            cp.sum_squares(error_b)
+            cp.sum_squares(weighted_error_b)
             + penalty_known
             + lambda_multiple * multiple_penalty
         )
@@ -318,7 +369,7 @@ def run_phase(
 
         # ------ common-block update (gentle) ------
         current_recon = np.sum(x_val * b_new, axis=1)
-        optimal_common = np.mean(observations - current_recon)
+        optimal_common = np.median(observations - current_recon)
 
         if common_block_fixed:
             initial_common = common_history[0]
@@ -2539,6 +2590,7 @@ def solve_progressive(
         verbose=verbose,
         initial_x=phase3a_initial_x,
         should_cancel=should_cancel,
+        known_masses_anchor=known_differential,
     )
 
     # Use whichever is better
@@ -2601,6 +2653,7 @@ def solve_progressive(
             verbose=verbose,
             initial_x=phase3b_initial_x,
             should_cancel=should_cancel,
+            known_masses_anchor=known_differential,
         )
 
         if refined_result["b"] is not None:

@@ -569,6 +569,11 @@ textarea { resize: vertical; font-family: monospace; }
 <div class="diag-model-selector" id="residChartModelSelector">
   <label for="residChartModelSelect">Model:</label>
   <select id="residChartModelSelect" onchange="filterResidualCharts()"></select>
+  <label for="residChartYUnit" style="margin-left:.75rem;">Y Unit:</label>
+  <select id="residChartYUnit" onchange="filterResidualCharts()">
+    <option value="da" selected>Da</option>
+    <option value="ppm">ppm</option>
+  </select>
   <label for="residChartYScale" style="margin-left:.75rem;">Y axis:</label>
   <select id="residChartYScale" onchange="filterResidualCharts()">
     <option value="auto">Autoscale (all peaks)</option>
@@ -1554,39 +1559,44 @@ function getCompositionTint(composition, blockNames) {
   // dHex (Fuc) always blends in some red, regardless of category
   if (neuAc > 0) {
     // Purple: #9a36a0 = rgb(154, 54, 160), Red: rgb(238, 38, 46)
-    const redMix = Math.min(fuc, 3) * 0.10;
+    const redMix = Math.min(fuc * 0.10, 1.0);
     const baseMix = 1 - redMix;
     const r = Math.round(154 * baseMix + 238 * redMix);
     const g = Math.round(54 * baseMix + 38 * redMix);
     const b = Math.round(160 * baseMix + 46 * redMix);
-    const alpha = 0.07 + Math.min(neuAc, 4) * 0.05 + Math.min(fuc, 3) * 0.02;
+    const alpha = Math.min(0.07 + neuAc * 0.05 + fuc * 0.02, 1.0);
     return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
   }
   if (hexNAc > 0) {
     // Blue: #3970c0 = rgb(57, 112, 192), Red: rgb(238, 38, 46)
-    const redMix = Math.min(fuc, 3) * 0.10;
+    const redMix = Math.min(fuc * 0.10, 1.0);
     const baseMix = 1 - redMix;
     const r = Math.round(57 * baseMix + 238 * redMix);
     const g = Math.round(112 * baseMix + 38 * redMix);
     const b = Math.round(192 * baseMix + 46 * redMix);
-    const alpha = 0.07 + Math.min(hexNAc, 4) * 0.05 + Math.min(fuc, 3) * 0.02;
+    const alpha = Math.min(0.07 + hexNAc * 0.05 + fuc * 0.02, 1.0);
     return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
   }
   if (hex > 0 && fuc > 0) {
     // Green + subtle red shift per Fuc
     // Green: rgb(52, 183, 93), Red: rgb(238, 38, 46)
-    const redMix = Math.min(fuc, 3) * 0.10;  // 10-30% red influence
+    const redMix = Math.min(fuc * 0.10, 1.0);  // 10-100% red influence
     const greenMix = 1 - redMix;
     const r = Math.round(52 * greenMix + 238 * redMix);
     const g = Math.round(183 * greenMix + 38 * redMix);
     const b = Math.round(93 * greenMix + 46 * redMix);
-    const alpha = 0.07 + Math.min(hex, 9) * 0.025 + Math.min(fuc, 3) * 0.02;
+    const alpha = Math.min(0.07 + hex * 0.025 + fuc * 0.02, 1.0);
     return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
   }
   if (hex > 0) {
     // Green only: #34b75d = rgb(52, 183, 93)
-    const alpha = 0.07 + Math.min(hex, 9) * 0.025;
+    const alpha = Math.min(0.07 + hex * 0.025, 1.0);
     return `rgba(52, 183, 93, ${alpha.toFixed(3)})`;
+  }
+  if (fuc > 0) {
+    // Red only: rgb(238, 38, 46)
+    const alpha = Math.min(0.07 + fuc * 0.02, 1.0);
+    return `rgba(238, 38, 46, ${alpha.toFixed(3)})`;
   }
   return '';
 }
@@ -1621,7 +1631,7 @@ function buildTree(chain, blockNames, commonBlockMass) {
       pxPerDa = 20 / medianGap;
     }
   }
-  const TRACK_PX = Math.max(120, Math.min(800, Math.round(massRange * pxPerDa)));
+  const TRACK_PX = Math.max(500, Math.min(1600, Math.round(massRange * pxPerDa)));
   const massToX  = (mass) => {
     if (!mass || mass <= 0) return 0;
     return Math.max(0, ((mass - commonMass) / massRange) * TRACK_PX);
@@ -2287,8 +2297,10 @@ function filterResidualCharts() {
 
   const sel = document.getElementById('residChartModelSelect');
   const yScaleSel = document.getElementById('residChartYScale');
+  const yUnitSel = document.getElementById('residChartYUnit');
   const chosen = sel.value;
   const yScaleMode = yScaleSel ? yScaleSel.value : 'auto';
+  const yUnit = yUnitSel ? yUnitSel.value : 'da';
   const models = _residualDiagData.models;
 
   const toRender = chosen === '__all__'
@@ -2324,9 +2336,14 @@ function filterResidualCharts() {
       }
     }
 
-    const goodPts    = points.filter(p => p.status === 'GOOD' && !zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
-    const goodZeroPts = points.filter(p => p.status === 'GOOD' && zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
-    const badPts     = points.filter(p => p.status !== 'GOOD').map(p => ({x: p.mz, y: p.error, pid: p.peak_id}));
+    const transformY = (p) => {
+      if (yUnit === 'ppm') return (p.error / p.mz) * 1000000;
+      return p.error;
+    };
+
+    const goodPts    = points.filter(p => p.status === 'GOOD' && !zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: transformY(p), errorDa: p.error, pid: p.peak_id}));
+    const goodZeroPts = points.filter(p => p.status === 'GOOD' && zeroDegPeaks.has(p.peak_id)).map(p => ({x: p.mz, y: transformY(p), errorDa: p.error, pid: p.peak_id}));
+    const badPts     = points.filter(p => p.status !== 'GOOD').map(p => ({x: p.mz, y: transformY(p), errorDa: p.error, pid: p.peak_id}));
 
     const allMz = points.map(p => p.mz);
     const xMinRaw = Math.min(...allMz);
@@ -2393,7 +2410,9 @@ function filterResidualCharts() {
               label: function(ctx) {
                 const pt = ctx.dataset.data[ctx.dataIndex];
                 const pid = pt && pt.pid != null ? ' #' + pt.pid : '';
-                return ctx.dataset.label + pid + ': m/z=' + ctx.parsed.x.toFixed(3) + ', error=' + ctx.parsed.y.toFixed(5);
+                const daStr = pt.errorDa.toFixed(5) + ' Da';
+                const ppmStr = ((pt.errorDa / ctx.parsed.x) * 1000000).toFixed(2) + ' ppm';
+                return ctx.dataset.label + pid + ': m/z=' + ctx.parsed.x.toFixed(3) + ', err=' + daStr + ' (' + ppmStr + ')';
               }
             }
           },
@@ -2416,7 +2435,7 @@ function filterResidualCharts() {
             ticks: { stepSize: xStep },
           },
           y: {
-            title: { display: true, text: 'Mass error (Da)', font: { size: 12, weight: 'bold' } },
+            title: { display: true, text: yUnit === 'ppm' ? 'Mass error (ppm)' : 'Mass error (Da)', font: { size: 12, weight: 'bold' } },
             ...yScaleOptions,
           },
         },
