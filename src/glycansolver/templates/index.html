@@ -210,7 +210,7 @@ textarea { resize: vertical; font-family: monospace; }
 <div class="container">
 
 <div class="title-row">
-  <h1>GlycanSolver <small>v{{ app_version }} · Progressive MALDI peak decomposition. Powered by Gurobi. Only for non-commercial purposes.</small></h1>
+  <h1>GlycanSolver <small>v{{ app_version }} · Progressive mass spectrometry peak decomposition. Powered by Gurobi. Only for non-commercial purposes.</small></h1>
   <img class="title-logo" src="/gurobi_logo.svg" alt="Gurobi logo">
 </div>
 
@@ -1613,7 +1613,12 @@ function buildTree(chain, blockNames, commonBlockMass) {
   const minPeakMass = Math.min(...realNodes.map(n => n.mass));
   const commonMass = (commonBlockMass && commonBlockMass < minPeakMass) ? commonBlockMass : minPeakMass;
   const maxMass    = Math.max(...realNodes.map(n => n.mass));
-  const rulerEnd   = Math.ceil(maxMass / 1000) * 1000;
+  
+  let roughRange = maxMass - commonMass;
+  if (roughRange <= 0) roughRange = 100;
+  const interval = _niceTickInterval(roughRange, 6);
+  
+  const rulerEnd   = Math.ceil(maxMass / interval) * interval;
   const massRange  = rulerEnd - commonMass || 1;
 
   // Smart auto-scale: ~20px between median-spaced neighbours
@@ -1631,7 +1636,9 @@ function buildTree(chain, blockNames, commonBlockMass) {
       pxPerDa = 20 / medianGap;
     }
   }
-  const TRACK_PX = Math.max(500, Math.min(1600, Math.round(massRange * pxPerDa)));
+  const maxTrackPx = Math.max(100, window.innerWidth * 0.5);
+  const minTrackPx = Math.min(400, maxTrackPx);
+  const TRACK_PX = Math.max(minTrackPx, Math.min(maxTrackPx, Math.round(massRange * pxPerDa)));
   const massToX  = (mass) => {
     if (!mass || mass <= 0) return 0;
     return Math.max(0, ((mass - commonMass) / massRange) * TRACK_PX);
@@ -1642,7 +1649,6 @@ function buildTree(chain, blockNames, commonBlockMass) {
   rulerRow.style.cssText = 'position:relative; height:1.3rem; margin-bottom:.15rem;'
     + 'width:' + (TRACK_PX + 2) + 'px; border-bottom:1px solid #d1d5db;';
 
-  const interval = _niceTickInterval(massRange, 6);
   _addRulerTick(rulerRow, 0, commonMass.toFixed(0), true);
   const firstTick = Math.ceil(commonMass / interval) * interval;
   for (let mz = firstTick; mz <= rulerEnd + interval * 0.01; mz += interval) {

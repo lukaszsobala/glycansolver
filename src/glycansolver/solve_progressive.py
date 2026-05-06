@@ -165,7 +165,7 @@ def run_phase(
             "rss": rss,
             "n_good": n_good,
             "n_bad": n - n_good,
-            "mean_error": float(np.mean(errors)),
+            "median_error": float(np.median(errors)),
             "errors": errors,
             "converged": False,
             "used_unknowns": 0,
@@ -414,10 +414,10 @@ def run_phase(
         bad_count = int(np.sum(errors >= tol_final))
 
         # ---- progress output ----
-        mean_err = float(np.mean(errors))
+        median_err = float(np.median(errors))
         print(
-            f"    iter {it:3d}: bad={bad_count}/{n}, "
-            f"mean_err={mean_err:.4f}, max_err={np.max(errors):.4f}"
+            f"    iter {it:3d}: good={n-bad_count}/{n}, "
+            f"med_err={median_err:.4f}"
         )
 
         if bad_count < best_bad_count:
@@ -483,7 +483,7 @@ def run_phase(
         "rss": rss,
         "n_good": n_good,
         "n_bad": n_bad,
-        "mean_error": float(np.mean(errors)) if len(errors) > 0 else float("inf"),
+        "median_error": float(np.median(errors)) if len(errors) > 0 else float("inf"),
         "errors": errors,
         "converged": reached_goal,
         "used_unknowns": used_unknowns,
@@ -1512,7 +1512,7 @@ def _run_exhaustive_comparison(
                     "bic": bic_m,
                     "n_good": n_good_m,
                     "n_bad": n_bad_m,
-                    "mean_error": float(np.mean(errors_m)),
+                    "median_error": float(np.median(errors_m)),
                     "blocks_used": bnames_sub,
                     "block_indices": subset,
                     "n_blocks": m,
@@ -1622,6 +1622,7 @@ def solve_progressive(
     exclude=None,
     protect=None,
     exhaustive=1,
+    sanity_check=False,
     common_composition=None,
     should_cancel=None,
     glycan_type=None,
@@ -1677,6 +1678,8 @@ def solve_progressive(
     if exclude:
         cmd_parts.append(f'-e "{exclude}"')
     cmd_parts.append(f"--exhaustive {exhaustive}")
+    if sanity_check:
+        cmd_parts.append("--sanity-check")
     if glycan_type:
         cmd_parts.append(f"--glycan-type {glycan_type}")
     if verbose:
@@ -1853,8 +1856,7 @@ def solve_progressive(
     )
 
     # ---- timeout ----
-    _start_time = time.time()  # noqa: F841 (reserved for future global timeout)
-    timeout_seconds = timeout * 60 if timeout > 0 else None
+    op_timeout = timeout * 60 if timeout > 0 else 180
 
     # ================================================================
     # GENERATE CANDIDATES
@@ -1993,9 +1995,6 @@ def solve_progressive(
 
     # Baseline is simple (known blocks only), converges fast
     phase_iters = min(iterations, 40)
-    # Give baseline at most 40% of total timeout
-    baseline_timeout = timeout_seconds * 0.40 if timeout_seconds else None
-    baseline_start = time.time()
 
     baseline = run_phase(
         observations,
@@ -2013,16 +2012,16 @@ def solve_progressive(
         bad_allowed=n,           # don't force all in baseline
         postgoal=min(postgoal, 5),
         common_block_fixed=common_block_fixed,
-        timeout_seconds=baseline_timeout,
-        start_time=baseline_start,
+        timeout_seconds=op_timeout,
+        start_time=time.time(),
         verbose=verbose,
         should_cancel=should_cancel,
     )
 
     print(
         f"\nBaseline result: BIC={baseline['bic']:.1f}, "
-        f"good={baseline['n_good']}/{n}, bad={baseline['n_bad']}, "
-        f"mean_error={baseline['mean_error']:.4f}"
+        f"good={baseline['n_good']}/{n}, "
+        f"med_err={baseline['median_error']:.4f}"
     )
 
     best_model = baseline
@@ -2030,6 +2029,42 @@ def solve_progressive(
     selected_unknown_cand_indices = []  # parallel list: candidate index per selected unknown
     used_candidate_indices = set()
     current_common = baseline["common"]
+
+    # Helper to calculate mass-adjusted BIC. Smaller candidate masses artificially
+    # shrink the RSS when fitting noise, decreasing the raw BIC by approx 2*n*ln(mass).
+    # We add a prior penalty to counteract this and ensure larger blocks aren't disadvantaged.
+    def _mass_adjusted_bic(raw_bic, *masses):
+        if raw_bic is None or raw_bic == float("inf"):
+            return float("inf")
+        penalty = 0.0
+        for m in masses:
+            penalty += 2 * n * np.log(300.0 / max(m, 1.0))
+        return raw_bic + penalty
+
+    def _connectivity_score(x_matrix, errors, final_tol):
+        """Compute BioConsensus2 style L1<=2 connectivity score using only good peaks."""
+        if x_matrix is None:
+            return 0.0
+        x_round = np.round(x_matrix)
+        n_rows = x_round.shape[0]
+        step_freq = __import__("collections").Counter()
+        
+        # Filter to only include peaks that were successfully fit
+        valid_indices = [i for i in range(n_rows) if errors[i] < final_tol]
+        
+        for idx_i in range(len(valid_indices)):
+            i = valid_indices[idx_i]
+            ci = tuple(x_round[i])
+            for idx_j in range(idx_i + 1, len(valid_indices)):
+                j = valid_indices[idx_j]
+                cj = tuple(x_round[j])
+                d = tuple(cb - ca for ca, cb in zip(ci, cj))
+                l1 = sum(abs(v) for v in d)
+                if 1 <= l1 <= 2:
+                    d_neg = tuple(-v for v in d)
+                    sv = max(d, d_neg)
+                    step_freq[sv] += 1
+        return float(sum(f * f for f in step_freq.values()))
 
     # ================================================================
     # PHASE 2 – PROGRESSIVE BLOCK ADDITION
@@ -2115,10 +2150,6 @@ def solve_progressive(
             if verbose:
                 print(f"\n  Trial: adding {cand_mass:.4f} …")
 
-            # Each trial gets its own dedicated time budget
-            trial_start = time.time()
-            trial_timeout = 600  # 10 minutes per candidate trial
-
             result = run_phase(
                 observations,
                 current_common,
@@ -2135,8 +2166,8 @@ def solve_progressive(
                 bad_allowed=bad,
                 postgoal=min(postgoal, 5),
                 common_block_fixed=common_block_fixed,
-                timeout_seconds=trial_timeout,
-                start_time=trial_start,
+                timeout_seconds=op_timeout,
+                start_time=time.time(),
                 verbose=verbose,
                 initial_x=trial_warm_x,
                 should_cancel=should_cancel,
@@ -2146,20 +2177,19 @@ def solve_progressive(
             nm = _name_for_mass(cand_mass, "?")
             print(
                 f"  {cand_mass:.4f} ({nm}): BIC={result['bic']:.1f}, "
-                f"good={result['n_good']}/{n}, bad={result['n_bad']}, "
-                f"mean_err={result['mean_error']:.4f}"
+                f"conn={_connectivity_score(result['x'], result['errors'], final_tolerance):.1f}, "
+                f"good={result['n_good']}/{n}, "
+                f"med_err={result['median_error']:.4f}"
             )
 
         if not trial_results:
             print("No trials completed (timeout?).")
             break
 
-        # select best by BIC, break ties by n_good
-        trial_results.sort(key=lambda t: (t[2]["bic"], -t[2]["n_good"]))
+        # select best using a composite score weighing mass-adjusted BIC and n_good
+        # use an even stronger weight for n_good to prevent rare small blocks from tricking the solver
+        trial_results.sort(key=lambda t: (-t[2]["n_good"], -_connectivity_score(t[2]["x"], t[2]["errors"], final_tolerance), _mass_adjusted_bic(t[2]["bic"], t[1])))
         best_idx, best_mass, best_result = trial_results[0]
-
-        bic_improvement = best_model["bic"] - best_result["bic"]
-        peaks_improvement = best_result["n_good"] - best_model["n_good"]
 
         # resolve name using refined mass from optimisation
         refined_mass = best_mass
@@ -2168,6 +2198,9 @@ def solve_progressive(
             if r_idx < len(best_result["b"]):
                 refined_mass = best_result["b"][r_idx]
         block_name = _name_for_mass(refined_mass, f"Unknown_{step+1}")
+
+        bic_improvement = best_model["bic"] - _mass_adjusted_bic(best_result["bic"], refined_mass)
+        peaks_improvement = best_result["n_good"] - best_model["n_good"]
 
         # Check whether the candidate block is actually used in the solution
         candidate_col = k_known + len(selected_unknowns)  # column index of the new block
@@ -2178,7 +2211,8 @@ def solve_progressive(
         )
 
         print(f"\nBest candidate this round: {best_mass:.4f} → refined {refined_mass:.4f} ({block_name})")
-        print(f"  BIC change : {bic_improvement:+.1f} ({'better' if bic_improvement > 0 else 'worse/equal'})")
+        print(f"  Connectivity : {_connectivity_score(best_result['x'], best_result['errors'], final_tolerance):.1f} (replaces BIC for tie-breaking)")
+        print(f"  BIC change : {bic_improvement:+.1f} (adjusted)")
         print(f"  Peaks gained: {peaks_improvement:+d}")
         print(f"  Block used : {'yes' if candidate_used else 'no'}")
 
@@ -2205,7 +2239,7 @@ def solve_progressive(
             # except N-1, then re-probe block N-1 using the original
             # candidate list.  This catches cases where the first unknown
             # block was a spurious match.
-            if len(selected_unknowns) >= 2:
+            if sanity_check and len(selected_unknowns) >= 2:
                 target_pos = len(selected_unknowns) - 2  # index of block to re-check
                 target_mass, target_name = selected_unknowns[target_pos]
 
@@ -2276,8 +2310,6 @@ def solve_progressive(
                             san_warm_x[:, k_known + target_pos] = 0
 
                         san_trial_iters = min(iterations, 15)
-                        san_start = time.time()
-                        san_timeout = 600
 
                         san_result = run_phase(
                             observations,
@@ -2295,8 +2327,8 @@ def solve_progressive(
                             bad_allowed=bad,
                             postgoal=min(postgoal, 5),
                             common_block_fixed=common_block_fixed,
-                            timeout_seconds=san_timeout,
-                            start_time=san_start,
+                            timeout_seconds=op_timeout,
+                            start_time=time.time(),
                             verbose=verbose,
                             initial_x=san_warm_x,
                             should_cancel=should_cancel,
@@ -2310,14 +2342,12 @@ def solve_progressive(
                             f"    {si_mass:.4f} ({nm}): "
                             f"BIC={san_result['bic']:.1f}, "
                             f"good={san_result['n_good']}/{n}, "
-                            f"bad={san_result['n_bad']}, "
-                            f"mean_err="
-                            f"{san_result['mean_error']:.4f}"
+                            f"med_err={san_result['median_error']:.4f}"
                         )
 
-                    # Pick the best sanity candidate
+                    # Pick the best sanity candidate using a composite score weighing mass-adjusted BIC and n_good
                     sanity_results.sort(
-                        key=lambda t: (t[2]["bic"], -t[2]["n_good"])
+                        key=lambda t: (-t[2]["n_good"], -_connectivity_score(t[2]["x"], t[2]["errors"], final_tolerance), _mass_adjusted_bic(t[2]["bic"], t[1]))
                     )
                     (
                         best_san_idx,
@@ -2325,20 +2355,24 @@ def solve_progressive(
                         best_san_result,
                     ) = sanity_results[0]
 
+                    # Resolve name from refined mass
+                    ref_san_mass = best_san_mass
+                    if best_san_result["b"] is not None:
+                        r_idx = k_known + target_pos
+                        if r_idx < len(best_san_result["b"]):
+                            ref_san_mass = best_san_result["b"][
+                                r_idx
+                            ]
+
+                    adj_san_bic = _mass_adjusted_bic(best_san_result["bic"], ref_san_mass)
+                    adj_best_bic = _mass_adjusted_bic(best_model["bic"], target_mass)
+
                     # Accept replacement only if it actually improves
                     # over the current model AND is a different block
                     if (
-                        best_san_result["bic"] < best_model["bic"]
+                        adj_san_bic < adj_best_bic
                         and abs(best_san_mass - target_mass) > 0.5
                     ):
-                        # Resolve name from refined mass
-                        ref_san_mass = best_san_mass
-                        if best_san_result["b"] is not None:
-                            r_idx = k_known + target_pos
-                            if r_idx < len(best_san_result["b"]):
-                                ref_san_mass = best_san_result["b"][
-                                    r_idx
-                                ]
                         new_san_name = _name_for_mass(
                             ref_san_mass,
                             f"Unknown_{target_pos + 1}",
@@ -2432,7 +2466,6 @@ def solve_progressive(
                     if prev_x is not None:
                         pair_warm_x = np.hstack([prev_x, np.zeros((n, 2))])
 
-                    pair_start = time.time()
                     pair_result = run_phase(
                         observations,
                         current_common,
@@ -2449,8 +2482,8 @@ def solve_progressive(
                         bad_allowed=bad,
                         postgoal=min(postgoal, 5),
                         common_block_fixed=common_block_fixed,
-                        timeout_seconds=600,
-                        start_time=pair_start,
+                        timeout_seconds=op_timeout,
+                        start_time=time.time(),
                         verbose=verbose,
                         initial_x=pair_warm_x,
                         should_cancel=should_cancel,
@@ -2461,16 +2494,12 @@ def solve_progressive(
                         f"  {mass_a:.4f} ({nm_a}) + {mass_b:.4f} ({nm_b}): "
                         f"BIC={pair_result['bic']:.1f}, "
                         f"good={pair_result['n_good']}/{n}, "
-                        f"bad={pair_result['n_bad']}, "
-                        f"mean_err={pair_result['mean_error']:.4f}"
+                        f"med_err={pair_result['median_error']:.4f}"
                     )
 
                 if pair_results:
-                    pair_results.sort(key=lambda t: (t[4]["bic"], -t[4]["n_good"]))
+                    pair_results.sort(key=lambda t: (-t[4]["n_good"], -_connectivity_score(t[4]["x"], t[4]["errors"], final_tolerance), _mass_adjusted_bic(t[4]["bic"], t[2], t[3])))
                     p_idx_a, p_idx_b, p_mass_a, p_mass_b, p_result = pair_results[0]
-
-                    p_bic_imp = best_model["bic"] - p_result["bic"]
-                    p_peaks_imp = p_result["n_good"] - best_model["n_good"]
 
                     # Check that BOTH blocks are actually used
                     col_a = k_known + len(selected_unknowns)
@@ -2495,11 +2524,15 @@ def solve_progressive(
                         if col_b < len(p_result["b"]):
                             ref_b = p_result["b"][col_b]
 
+                    p_bic_imp = best_model["bic"] - _mass_adjusted_bic(p_result["bic"], ref_a, ref_b)
+                    p_peaks_imp = p_result["n_good"] - best_model["n_good"]
+
                     name_a = _name_for_mass(ref_a, "Unknown_1")
                     name_b = _name_for_mass(ref_b, "Unknown_2")
 
                     print(f"\n  Best pair: {ref_a:.4f} ({name_a}) + {ref_b:.4f} ({name_b})")
-                    print(f"    BIC change : {p_bic_imp:+.1f}")
+                    print(f"    Connectivity: {_connectivity_score(p_result['x'], p_result['errors'], final_tolerance):.1f}")
+                    print(f"    BIC change : {p_bic_imp:+.1f} (adjusted)")
                     print(f"    Peaks gained: {p_peaks_imp:+d}")
                     print(f"    Block A used: {'yes' if used_a else 'no'}")
                     print(f"    Block B used: {'yes' if used_b else 'no'}")
@@ -2562,10 +2595,6 @@ def solve_progressive(
     ):
         final_all_masses = best_model["b"].copy()
 
-    # Phase 3a gets its own time budget (not limited by global timeout)
-    phase3a_start = time.time()
-    phase3a_timeout = 600  # 10 minutes dedicated to all-peaks refinement
-
     # Warm-start Phase 3a from the best x found in Phase 2
     phase3a_initial_x = best_model["x"] if best_model["x"] is not None else None
 
@@ -2585,8 +2614,8 @@ def solve_progressive(
         bad_allowed=bad,
         postgoal=postgoal,
         common_block_fixed=common_block_fixed,
-        timeout_seconds=phase3a_timeout,
-        start_time=phase3a_start,
+        timeout_seconds=op_timeout,
+        start_time=time.time(),
         verbose=verbose,
         initial_x=phase3a_initial_x,
         should_cancel=should_cancel,
@@ -2623,10 +2652,6 @@ def solve_progressive(
         refined_masses = best_model["b"].copy() if best_model["b"] is not None else final_all_masses.copy()
         refined_common = best_model["common"]
 
-        # Phase 3b gets its own time budget (not limited by global timeout)
-        phase3b_start = time.time()
-        phase3b_timeout = 600  # 10 minutes dedicated to good-peaks refinement
-
         # Warm-start Phase 3b from best model x (filtered to good peaks)
         phase3b_initial_x = None
         if best_model["x"] is not None:
@@ -2648,8 +2673,8 @@ def solve_progressive(
             bad_allowed=0,
             postgoal=postgoal,
             common_block_fixed=common_block_fixed,
-            timeout_seconds=phase3b_timeout,
-            start_time=phase3b_start,
+            timeout_seconds=op_timeout,
+            start_time=time.time(),
             verbose=verbose,
             initial_x=phase3b_initial_x,
             should_cancel=should_cancel,
@@ -2697,7 +2722,7 @@ def solve_progressive(
 
                     print(
                         f"\n  3b result: good={n_good_all}/{n}, "
-                        f"mean_err={np.mean(errors_all):.4f}, BIC={bic_all:.1f}"
+                        f"med_err={np.median(errors_all):.4f}, BIC={bic_all:.1f}"
                     )
 
                     best_model = {
@@ -2708,7 +2733,7 @@ def solve_progressive(
                         "rss": rss_all,
                         "n_good": n_good_all,
                         "n_bad": n - n_good_all,
-                        "mean_error": float(np.mean(errors_all)),
+                        "median_error": float(np.median(errors_all)),
                         "errors": errors_all,
                         "converged": refined_result["converged"],
                         "used_unknowns": used_unk,
@@ -2808,7 +2833,7 @@ def solve_progressive(
             _ns = _lbl[:37] + "..." if len(_lbl) > 40 else _lbl
             _bic_str = f"{_res['bic']:>10.1f}" if _res['bic'] is not None else f"{'\u2014':>10}"
             print(f"  {_ns:<40} {_res['n_blocks']:>6} {_res['n_good']:>5} "
-                  f"{_res['n_bad']:>5} {_res['mean_error']:>9.4f} "
+                  f"{_res['n_bad']:>5} {_res['median_error']:>9.4f} "
                   f"{_bic_str}")
 
         # ---- per-peak analysis ----
@@ -2856,7 +2881,7 @@ def solve_progressive(
                 _model_best_counts[bm] = _model_best_counts.get(bm, 0) + 1
 
         if _n_good_peaks > 0:
-            print(f"\n  Model recommendation summary "
+            print(f"\n  Model summary "
                   f"({_n_good_peaks} good peaks total):")
             print(f"  {'Model':<40} {'Best for':>8} {'%':>6}")
             print(f"  {'-'*40} {'-'*8} {'-'*6}")
@@ -2905,7 +2930,7 @@ def solve_progressive(
             "bic": None,
             "n_good": _n_consensus_good,
             "n_bad": n - _n_consensus_good,
-            "mean_error": float(np.mean(consensus_errors)),
+            "median_error": float(np.median(consensus_errors)),
             "blocks_used": consensus_block_names,
             "block_indices": sorted(_consensus_blocks_used),
             "n_blocks": _consensus_n_blocks,
@@ -2915,7 +2940,7 @@ def solve_progressive(
         print("\n  Consensus model (per-peak simplest explanation):")
         print(f"    Blocks used: {'+'.join(consensus_block_names)}")
         print(f"    Good: {_n_consensus_good}/{n}, "
-              f"Mean error: {float(np.mean(consensus_errors)):.4f}")
+              f"Median error: {float(np.median(consensus_errors)):.4f}")
 
         # ---- build BioConsensus model ----
         # Uses biosynthetic network connectivity to pick the most
@@ -2947,7 +2972,7 @@ def solve_progressive(
             "bic": None,
             "n_good": _n_bio_good,
             "n_bad": n - _n_bio_good,
-            "mean_error": float(np.mean(bio_errors)),
+            "median_error": float(np.median(bio_errors)),
             "blocks_used": bio_block_names,
             "block_indices": sorted(_bio_blocks_used),
             "n_blocks": _bio_n_blocks,
@@ -2957,7 +2982,7 @@ def solve_progressive(
         print("\n  BioConsensus model (biosynthetically parsimonious):")
         print(f"    Blocks used: {'+'.join(bio_block_names)}")
         print(f"    Good: {_n_bio_good}/{n}, "
-              f"Mean error: {float(np.mean(bio_errors)):.4f}")
+              f"Median error: {float(np.median(bio_errors)):.4f}")
 
         # Show per-peak differences between Consensus and BioConsensus
         _n_diff = 0
@@ -3013,7 +3038,7 @@ def solve_progressive(
             "bic": None,
             "n_good": _n_bio2_good,
             "n_bad": n - _n_bio2_good,
-            "mean_error": float(np.mean(bio2_errors)),
+            "median_error": float(np.median(bio2_errors)),
             "blocks_used": bio2_block_names,
             "block_indices": sorted(_bio2_blocks_used),
             "n_blocks": _bio2_n_blocks,
@@ -3022,7 +3047,7 @@ def solve_progressive(
 
         print(f"    Blocks used: {'+'.join(bio2_block_names)}")
         print(f"    Good: {_n_bio2_good}/{n}, "
-              f"Mean error: {float(np.mean(bio2_errors)):.4f}")
+              f"Median error: {float(np.median(bio2_errors)):.4f}")
 
         # Show per-peak differences vs BioConsensus
         _n_diff2 = 0
@@ -3103,7 +3128,7 @@ def solve_progressive(
             "bic": None,
             "n_good": _n_bio3_good,
             "n_bad": n - _n_bio3_good,
-            "mean_error": float(np.mean(bio3_errors)),
+            "median_error": float(np.median(bio3_errors)),
             "blocks_used": bio3_block_names,
             "block_indices": sorted(_bio3_blocks_used),
             "n_blocks": _bio3_n_blocks,
@@ -3112,7 +3137,7 @@ def solve_progressive(
 
         print(f"    Blocks used: {'+'.join(bio3_block_names)}")
         print(f"    Good: {_n_bio3_good}/{n}, "
-              f"Mean error: {float(np.mean(bio3_errors)):.4f}")
+              f"Median error: {float(np.median(bio3_errors)):.4f}")
 
         # Show per-peak differences vs BioConsensus2
         _n_diff3 = 0
@@ -3164,7 +3189,7 @@ def solve_progressive(
                 "rss": float(np.sum(_best_exh["errors"] ** 2)),
                 "n_good": _best_exh["n_good"],
                 "n_bad": _best_exh["n_bad"],
-                "mean_error": _best_exh["mean_error"],
+                "median_error": _best_exh["median_error"],
                 "errors": _best_exh["errors"],
                 "converged": True,
                 "used_unknowns": sum(
@@ -3222,7 +3247,7 @@ def solve_progressive(
                         "bic": bic_m,
                         "n_good": n_good_m,
                         "n_bad": n_bad_m,
-                        "mean_error": float(np.mean(errors_m)),
+                        "median_error": float(np.median(errors_m)),
                         "blocks_used": final_names[:m],
                     }
                 else:
@@ -3247,7 +3272,7 @@ def solve_progressive(
                 best_bic_model = m
             print(
                 f"  {m:<6} {names_str:<40} {res['n_good']:>5} {res['n_bad']:>5} "
-                f"{res['mean_error']:>9.4f} {res['bic']:>10.1f}"
+                f"{res['median_error']:>9.4f} {res['bic']:>10.1f}"
             )
 
         if best_bic_model is not None:
@@ -3326,7 +3351,7 @@ def solve_progressive(
                 "rss": float(np.sum(bic_best_res["errors"] ** 2)),
                 "n_good": bic_best_res["n_good"],
                 "n_bad": bic_best_res["n_bad"],
-                "mean_error": bic_best_res["mean_error"],
+                "median_error": bic_best_res["median_error"],
                 "errors": bic_best_res["errors"],
                 "converged": True,
                 "used_unknowns": best_bic_model - k_known,
@@ -3386,7 +3411,7 @@ def solve_progressive(
     print(f"  BIC    : {best_model['bic']:.1f}")
     print(f"  Good   : {best_model['n_good']}/{n}")
     print(f"  Bad    : {best_model['n_bad']}")
-    print(f"  Mean Δ : {best_model['mean_error']:.5f}")
+    print(f"  Median Δ : {best_model['median_error']:.5f}")
 
     print("\nObservation Decompositions:")
     for i in range(n):
@@ -3434,7 +3459,7 @@ def solve_progressive(
             print(f"\n{'='*60}")
             print("BioConsensus2 Decompositions:")
             print(f"  Good: {bio2_res['n_good']}/{n}, "
-                  f"Mean error: {bio2_res['mean_error']:.4f}")
+                  f"Median error: {bio2_res['median_error']:.4f}")
             print(f"{'='*60}")
             for i in range(n):
                 parts2 = []
@@ -3465,7 +3490,7 @@ def solve_progressive(
             print(f"\n{'='*60}")
             print("BioConsensus3 Decompositions (dependency-aware):")
             print(f"  Good: {bio3_res['n_good']}/{n}, "
-                  f"Mean error: {bio3_res['mean_error']:.4f}")
+                  f"Median error: {bio3_res['median_error']:.4f}")
             print(f"{'='*60}")
             for i in range(n):
                 parts3 = []

@@ -303,6 +303,12 @@ def parse_arguments():
         "(default: 1)",
     )
     parser.add_argument(
+        "--sanity-check",
+        action="store_true",
+        help="Whether to run the sanity check (re-verify the previous block) "
+        "after accepting a new candidate block.",
+    )
+    parser.add_argument(
         "--glycan-type",
         choices=["native", "permethylated", "peracetylated"],
         default=None,
@@ -365,6 +371,7 @@ def cli():
 
     exclude = args_dict.pop("exclude", None)
     exhaustive = args_dict.pop("exhaustive", 1)
+    sanity_check = args_dict.pop("sanity_check", False)
     common_composition = args_dict.pop("_common_composition", None)
     glycan_type = args_dict.pop("glycan_type", None)
 
@@ -373,6 +380,7 @@ def cli():
             **args_dict,
             exclude=exclude,
             exhaustive=exhaustive,
+            sanity_check=sanity_check,
             common_composition=common_composition,
             glycan_type=glycan_type,
         )
